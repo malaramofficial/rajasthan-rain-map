@@ -65,11 +65,22 @@ export const getFacebookBusinessAuthorizeUrl = createServerFn({ method: "GET" })
   const appId = getEnv("META_APP_ID") ?? getEnv("INSTAGRAM_CLIENT_ID");
   const configId = getEnv("META_FACEBOOK_CONFIG_ID");
   const redirectUri = getEnv("META_FACEBOOK_REDIRECT_URI");
-  if (!appId || !configId || !redirectUri || !getEnv("META_APP_SECRET")) {
-    return { url: null, configured: false, error: "META_APP_ID, META_FACEBOOK_CONFIG_ID, META_FACEBOOK_REDIRECT_URI और META_APP_SECRET configure करना बाकी है।" };
+  const appSecret = getEnv("META_APP_SECRET");
+  const missing = [
+    !appId ? "META_APP_ID" : null,
+    !configId ? "META_FACEBOOK_CONFIG_ID" : null,
+    !redirectUri ? "META_FACEBOOK_REDIRECT_URI" : null,
+    !appSecret ? "META_APP_SECRET" : null,
+  ].filter((value): value is string => Boolean(value));
+  if (missing.length > 0) {
+    return {
+      url: null,
+      configured: false,
+      error: `Facebook Business Login में ये server variables missing हैं: ${missing.join(", ")}`,
+    };
   }
   const state = await createFacebookState();
-  const params = new URLSearchParams({ client_id: appId, redirect_uri: redirectUri, config_id: configId, response_type: "code", override_default_response_type: "true", state });
+  const params = new URLSearchParams({ client_id: appId!, redirect_uri: redirectUri!, config_id: configId!, response_type: "code", override_default_response_type: "true", state });
   return { url: `${FACEBOOK_AUTHORIZE_URL}?${params.toString()}`, configured: true };
 });
 
