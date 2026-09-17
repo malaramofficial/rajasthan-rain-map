@@ -29,11 +29,12 @@ export default function RainMap({ snapshot }: { snapshot: PublicRainSnapshot }) 
       minZoom={5}
       maxZoom={11}
       zoomControl={false}
-      attributionControl={false}
+      attributionControl={true}
       className="h-full w-full bg-background"
     >
       <TileLayer
         url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        attribution="&copy; OpenStreetMap"
         className="rain-basemap"
       />
 
