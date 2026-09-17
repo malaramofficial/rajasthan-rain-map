@@ -12,7 +12,18 @@ export default function InstagramConnect() {
     try {
       const result = await getFacebookBusinessAuthorizeUrl();
       if (!result.url) {
-        setMessage(result.error ?? "Facebook Business Login अभी configure नहीं है।");
+        try {
+          const response = await fetch("/api/instagram/facebook-config", { cache: "no-store" });
+          const diagnostic = (await response.json()) as { missing?: string[] };
+          const missing = diagnostic.missing ?? [];
+          setMessage(
+            missing.length > 0
+              ? `Facebook Discovery में ये server variables missing हैं: ${missing.join(", ")}`
+              : result.error ?? "Facebook Business Login शुरू नहीं हो पाया।",
+          );
+        } catch {
+          setMessage(result.error ?? "Facebook Business Login शुरू नहीं हो पाया।");
+        }
         return;
       }
       window.location.assign(result.url);
@@ -48,7 +59,7 @@ export default function InstagramConnect() {
         disabled={loading !== null}
         className="rounded-full bg-card/90 px-3 py-2 text-xs font-semibold text-foreground shadow-sm backdrop-blur-sm disabled:opacity-60"
       >
-        {loading === "business" ? "Connecting…" : "Instagram Discovery Connect"}
+        {loading === "business" ? "Checking…" : "Instagram Discovery Connect"}
       </button>
       <button
         type="button"
