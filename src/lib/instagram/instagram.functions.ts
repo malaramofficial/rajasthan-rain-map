@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 
 const INSTAGRAM_AUTHORIZE_URL = "https://www.instagram.com/oauth/authorize";
 const INSTAGRAM_TOKEN_URL = "https://api.instagram.com/oauth/access_token";
+const INSTAGRAM_GRAPH_URL = "https://graph.instagram.com/me";
 
 function getEnv(name: string): string | undefined {
   return process.env[name];
@@ -27,6 +28,61 @@ export const getInstagramAuthorizeUrl = createServerFn({ method: "GET" }).handle
       url: `${INSTAGRAM_AUTHORIZE_URL}?${params.toString()}`,
       configured: true,
     };
+  },
+);
+
+export const verifyConfiguredInstagramToken = createServerFn({ method: "GET" }).handler(
+  async (): Promise<{
+    configured: boolean;
+    valid: boolean;
+    userId?: string;
+    username?: string;
+    error?: string;
+  }> => {
+    const accessToken = getEnv("INSTAGRAM_ACCESS_TOKEN");
+
+    if (!accessToken) {
+      return { configured: false, valid: false, error: "INSTAGRAM_ACCESS_TOKEN is not configured." };
+    }
+
+    const url = new URL(INSTAGRAM_GRAPH_URL);
+    url.searchParams.set("fields", "id,username");
+
+    try {
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        cache: "no-store",
+      });
+
+      const payload = (await response.json()) as {
+        id?: string;
+        username?: string;
+        error?: { message?: string };
+      };
+
+      if (!response.ok || !payload.id) {
+        return {
+          configured: true,
+          valid: false,
+          error: payload.error?.message || `Instagram API returned ${response.status}.`,
+        };
+      }
+
+      return {
+        configured: true,
+        valid: true,
+        userId: payload.id,
+        username: payload.username,
+      };
+    } catch (error) {
+      return {
+        configured: true,
+        valid: false,
+        error: error instanceof Error ? error.message : "Instagram API request failed.",
+      };
+    }
   },
 );
 
