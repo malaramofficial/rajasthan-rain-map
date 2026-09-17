@@ -1,28 +1,28 @@
 /**
  * Core data model for Rajasthan Rain Map.
  *
- * `RainEvidence` is the INTERNAL (admin / pipeline) record, mirroring the
- * Supabase table `public.rain_observations`. It is never sent to the public map.
- *
- * `PublicRainPoint` is the sanitised projection that the public map consumes.
+ * RainEvidence mirrors the Supabase table `public.rain_observations` and is
+ * internal pipeline data. PublicRainPoint is the only shape rendered on the
+ * public map.
  */
 
 export type RainStatus = "raining" | "recent_rain" | "forecast" | "dry";
 
-export type ForecastStatus = "rain_expected" | "no_rain_expected" | "unknown";
+/** Must match the Supabase CHECK constraint. */
+export type ForecastStatus = "none" | "possible" | "likely" | "high";
 
-export type SourceType = "social_post" | "weather_api" | "news" | "manual";
+/** Must match the Supabase CHECK constraint. */
+export type SourceType = "instagram" | "weather" | "manual" | "other";
 
 export type OriginalOrRepost = "original" | "repost" | "unknown";
 
-export type VerificationStatus = "verified" | "pending" | "rejected";
+/** Must match the Supabase CHECK constraint. */
+export type VerificationStatus = "verified" | "pending" | "rejected" | "uncertain";
 
-/** Internal evidence record — admin/pipeline only. Never expose publicly. */
+/** Internal evidence record — never expose publicly. */
 export interface RainEvidence {
   id: string;
-  /** ISO date (YYYY-MM-DD) the observation belongs to. */
   observation_date: string;
-  /** ISO datetime of the actual event, when known. */
   event_time: string | null;
   place: string;
   district: string;
@@ -30,7 +30,6 @@ export interface RainEvidence {
   longitude: number;
   rain_observed: boolean;
   forecast_status: ForecastStatus;
-  /** 0..1 */
   confidence: number;
   source_url: string | null;
   source_type: SourceType;
@@ -38,7 +37,7 @@ export interface RainEvidence {
   verification_status: VerificationStatus;
 }
 
-/** What the public full-screen map is allowed to know. */
+/** Only safe fields allowed to reach the public map. */
 export interface PublicRainPoint {
   id: string;
   place: string;
@@ -52,9 +51,7 @@ export type SnapshotState = "ok" | "empty" | "error";
 
 export interface PublicRainSnapshot {
   observation_date: string;
-  /** ISO datetime the snapshot was generated. */
   updated_at: string;
   points: PublicRainPoint[];
-  /** Coarse state for the UI. Carries no technical detail. */
   state: SnapshotState;
 }
