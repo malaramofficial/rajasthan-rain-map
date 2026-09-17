@@ -21,8 +21,11 @@ export default function RainMap({ snapshot }: { snapshot: PublicRainSnapshot }) 
   return (
     <MapContainer
       bounds={RAJASTHAN_BOUNDS}
+      boundsOptions={{ padding: [8, 8] }}
       maxBounds={RAJASTHAN_BOUNDS}
       maxBoundsViscosity={0.9}
+      zoomSnap={0.1}
+      zoomDelta={0.5}
       minZoom={5}
       maxZoom={11}
       zoomControl={false}
