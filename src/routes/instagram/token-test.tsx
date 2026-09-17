@@ -38,12 +38,13 @@ function InstagramTokenTestPage() {
         </p>
 
         {state === "checking" && (
-          <p className="mt-6 text-sm">Instagram API से token verify हो रहा है…</p>
+          <p className="mt-6 text-sm">Server environment और Instagram API जाँची जा रही है…</p>
         )}
 
         {state === "done" && result?.valid && (
           <div className="mt-6 space-y-2 rounded-xl border p-4">
             <p className="text-sm font-semibold">✅ Token valid है</p>
+            <p className="text-sm">Server environment: configured</p>
             <p className="text-sm">Instagram ID: {result.userId}</p>
             <p className="text-sm">Username: {result.username || "—"}</p>
           </div>
@@ -52,6 +53,9 @@ function InstagramTokenTestPage() {
         {state === "done" && !result?.valid && (
           <div className="mt-6 space-y-2 rounded-xl border p-4">
             <p className="text-sm font-semibold">❌ Token verify नहीं हुआ</p>
+            <p className="text-sm">
+              Server environment: {result?.configured ? "configured" : "NOT configured"}
+            </p>
             <p className="break-words text-sm text-destructive">
               {result?.error || "Unknown error"}
             </p>
