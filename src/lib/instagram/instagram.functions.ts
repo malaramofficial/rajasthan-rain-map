@@ -86,6 +86,81 @@ export const verifyConfiguredInstagramToken = createServerFn({ method: "GET" }).
   },
 );
 
+export const testInstagramMediaAccess = createServerFn({ method: "GET" }).handler(
+  async (): Promise<{
+    configured: boolean;
+    valid: boolean;
+    mediaEndpoint: "success" | "failed" | "not_tested";
+    mediaCount?: number;
+    reelsCount?: number;
+    latestTimestamp?: string;
+    error?: string;
+  }> => {
+    const accessToken = getEnv("INSTAGRAM_ACCESS_TOKEN");
+
+    if (!accessToken) {
+      return {
+        configured: false,
+        valid: false,
+        mediaEndpoint: "not_tested",
+        error: "INSTAGRAM_ACCESS_TOKEN is not configured.",
+      };
+    }
+
+    try {
+      await readInstagramProfile(accessToken);
+
+      const url = new URL("https://graph.instagram.com/me/media");
+      url.searchParams.set(
+        "fields",
+        "id,media_type,media_product_type,timestamp,permalink,caption",
+      );
+      url.searchParams.set("limit", "10");
+
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        cache: "no-store",
+      });
+
+      const payload = (await response.json()) as {
+        data?: Array<{
+          media_type?: string;
+          timestamp?: string;
+        }>;
+        error?: { message?: string };
+      };
+
+      if (!response.ok) {
+        throw new Error(
+          payload.error?.message || `Instagram media API returned ${response.status}.`,
+        );
+      }
+
+      const media = payload.data ?? [];
+      const reelsCount = media.filter(
+        (item) =>
+          item.media_type === "VIDEO" || item.media_product_type === "REELS",
+      ).length;
+
+      return {
+        configured: true,
+        valid: true,
+        mediaEndpoint: "success",
+        mediaCount: media.length,
+        reelsCount,
+        latestTimestamp: media[0]?.timestamp,
+      };
+    } catch (error) {
+      return {
+        configured: true,
+        valid: false,
+        mediaEndpoint: "failed",
+        error: error instanceof Error ? error.message : "Instagram media API request failed.",
+      };
+    }
+  },
+);
+
 export const exchangeInstagramCode = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => {
     if (!input || typeof input !== "object" || !("code" in input)) {
