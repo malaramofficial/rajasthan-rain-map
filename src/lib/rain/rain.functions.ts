@@ -1,6 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
 
-import { MOCK_EVIDENCE } from "./mock-evidence";
 import { toPublicPoints } from "./projection";
 import type { PublicRainSnapshot, RainEvidence } from "./types";
 
@@ -34,13 +33,9 @@ const SELECT_COLUMNS = [
 /**
  * Public read for the full-screen map.
  *
- * Reads verified rows for today from `public.rain_observations` through the
- * publishable (anon) key, so row-level security still applies. Until the
- * Supabase project is linked, it falls back to the bundled sample data so the
- * map is never blank in development.
- *
- * The projection layer guarantees nothing internal (source_url, confidence,
- * verification_status, ...) ever reaches the browser.
+ * Production never falls back to invented/sample observations. If Supabase
+ * is not configured, the public map is empty rather than showing fake rain.
+ * The server projection strips internal evidence fields before returning data.
  */
 export const getPublicRainSnapshot = createServerFn({ method: "GET" }).handler(
   async (): Promise<PublicRainSnapshot> => {
@@ -51,12 +46,11 @@ export const getPublicRainSnapshot = createServerFn({ method: "GET" }).handler(
     const key = process.env["SUPABASE_PUBLISHABLE_KEY"];
 
     if (!url || !key) {
-      // Not connected yet — sample data keeps the map testable.
       return {
         observation_date,
         updated_at,
-        points: toPublicPoints(MOCK_EVIDENCE),
-        state: "ok",
+        points: [],
+        state: "empty",
       };
     }
 
