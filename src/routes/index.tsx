@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ClientOnly } from "@tanstack/react-router";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 
 import { getPublicRainSnapshot } from "@/lib/rain/rain.functions";
 
@@ -40,6 +40,11 @@ function formatUpdated(iso: string) {
 
 function RainMapPage() {
   const snapshot = Route.useLoaderData();
+
+  useEffect(() => {
+    const refresh = window.setInterval(() => window.location.reload(), 5 * 60 * 1000);
+    return () => window.clearInterval(refresh);
+  }, []);
 
   return (
     <main className="fixed inset-0 overflow-hidden bg-background">
