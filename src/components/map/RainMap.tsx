@@ -30,9 +30,10 @@ export default function RainMap({ snapshot }: { snapshot: PublicRainSnapshot }) 
       className="h-full w-full bg-background"
     >
       <TileLayer
-        url="https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
-        subdomains={["a", "b", "c", "d"]}
+        url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        className="rain-basemap"
       />
+
       {snapshot.points.map((point) => (
         <CircleMarker
           key={point.id}
