@@ -195,3 +195,8 @@
 .leaflet-tooltip.rain-tooltip::before {
   display: none;
 }
+
+/* Soften the basemap so rain markers stay the focus */
+.leaflet-tile-pane .rain-basemap {
+  filter: grayscale(1) brightness(1.08) contrast(0.82) opacity(0.65);
+}
