@@ -1,6 +1,6 @@
 import "leaflet/dist/leaflet.css";
 
-import { CircleMarker, MapContainer, TileLayer, Tooltip } from "react-leaflet";
+import { CircleMarker, MapContainer, TileLayer } from "react-leaflet";
 
 import type { PublicRainSnapshot, RainStatus } from "@/lib/rain/types";
 
@@ -45,11 +45,7 @@ export default function RainMap({ snapshot }: { snapshot: PublicRainSnapshot }) 
           radius={9}
           className={STATUS_CLASS[point.status]}
           pathOptions={{ weight: 2 }}
-        >
-          <Tooltip direction="top" offset={[0, -8]} opacity={1} className="rain-tooltip">
-            <span className="font-medium">{point.place}</span>
-          </Tooltip>
-        </CircleMarker>
+        />
       ))}
     </MapContainer>
   );
