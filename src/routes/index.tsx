@@ -41,13 +41,6 @@ function formatUpdated(iso: string) {
 function RainMapPage() {
   const snapshot = Route.useLoaderData();
 
-  const notice =
-    snapshot.state === "error"
-      ? "Rain updates are unavailable right now"
-      : snapshot.state === "empty"
-        ? "No confirmed rain reports yet today"
-        : null;
-
   return (
     <main className="fixed inset-0 overflow-hidden bg-background">
       <h1 className="sr-only">Rajasthan Rain Map</h1>
@@ -58,15 +51,6 @@ function RainMapPage() {
         </Suspense>
       </ClientOnly>
 
-      {notice ? (
-        <p
-          className="pointer-events-none absolute left-1/2 top-[max(0.75rem,env(safe-area-inset-top))] z-[1000] -translate-x-1/2 rounded-full bg-card/85 px-3 py-1 text-[11px] font-medium tracking-wide text-muted-foreground shadow-sm backdrop-blur-sm"
-          role="status"
-        >
-          {notice}
-        </p>
-      ) : null}
-
       <p
         className="pointer-events-none absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-1/2 z-[1000] -translate-x-1/2 rounded-full bg-card/85 px-3 py-1 text-[11px] font-medium tracking-wide text-muted-foreground shadow-sm backdrop-blur-sm"
         aria-live="polite"
@@ -76,4 +60,3 @@ function RainMapPage() {
     </main>
   );
 }
-
