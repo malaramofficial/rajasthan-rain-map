@@ -40,26 +40,38 @@ async function fetchOwnMedia(token: string): Promise<InstagramMedia[]> {
   return payload.data ?? [];
 }
 
+function enrichCandidate(candidate: InstagramCandidateInput): InstagramCandidateInput {
+  const location = extractRajasthanLocation({
+    caption_text: candidate.caption_text,
+    speech_text: candidate.speech_text,
+    location_evidence: candidate.location_evidence,
+  });
+  const district = candidate.district ?? location.district;
+  const coords = districtCoordinates(district);
+
+  return {
+    ...candidate,
+    place: candidate.place ?? location.place,
+    district,
+    latitude: candidate.latitude ?? coords?.latitude ?? null,
+    longitude: candidate.longitude ?? coords?.longitude ?? null,
+    location_evidence: candidate.location_evidence ?? location.evidence,
+  };
+}
+
 async function insertEvidence(
   supabaseUrl: string,
   serviceRoleKey: string,
   input: InstagramCandidateInput,
   pipeline: ReturnType<typeof runRainEvidencePipeline>,
 ) {
-  const location = extractRajasthanLocation({
-    caption_text: input.caption_text,
-    speech_text: input.speech_text,
-    location_evidence: input.location_evidence,
-  });
-  const coords = districtCoordinates(input.district ?? location.district);
-
-  const response = await fetch(`${supabaseUrl}/rest/v1/instagram_rain_evidence`, {
+  const response = await fetch(`${supabaseUrl}/rest/v1/instagram_rain_evidence?on_conflict=source_url`, {
     method: "POST",
     headers: {
       apikey: serviceRoleKey,
       Authorization: `Bearer ${serviceRoleKey}`,
       "Content-Type": "application/json",
-      Prefer: "resolution=ignore-duplicates,return=minimal",
+      Prefer: "resolution=merge-duplicates,return=minimal",
     },
     body: JSON.stringify({
       platform: "instagram",
@@ -68,19 +80,20 @@ async function insertEvidence(
       posted_at: input.posted_at ?? null,
       event_date: input.event_date ?? null,
       event_time: input.event_time ?? null,
-      place: input.place ?? location.place,
-      district: input.district ?? location.district,
-      latitude: input.latitude ?? coords?.latitude ?? null,
-      longitude: input.longitude ?? coords?.longitude ?? null,
+      place: input.place ?? null,
+      district: input.district ?? null,
+      latitude: input.latitude ?? null,
+      longitude: input.longitude ?? null,
       caption_text: input.caption_text ?? null,
       speech_text: input.speech_text ?? null,
       visual_analysis: input.visual_analysis ?? null,
-      location_evidence: input.location_evidence ?? location.evidence,
+      location_evidence: input.location_evidence ?? null,
       rain_observed: pipeline.rain_observed,
       original_or_repost: input.original_or_repost ?? "unknown",
       verification_status: pipeline.verification_status,
       confidence: pipeline.confidence,
       rejection_reason: pipeline.rejection_reason,
+      updated_at: new Date().toISOString(),
     }),
   });
 
@@ -88,6 +101,26 @@ async function insertEvidence(
     const body = await response.text();
     throw new Error(`Supabase evidence insert failed (${response.status}): ${body}`);
   }
+}
+
+async function syncVerifiedObservations(supabaseUrl: string, serviceRoleKey: string): Promise<number> {
+  const response = await fetch(`${supabaseUrl}/rest/v1/rpc/sync_verified_instagram_observations`, {
+    method: "POST",
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      "Content-Type": "application/json",
+    },
+    body: "{}",
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Public observation sync failed (${response.status}): ${body}`);
+  }
+
+  const value = await response.json();
+  return typeof value === "number" ? value : 0;
 }
 
 export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).handler(
@@ -107,9 +140,10 @@ export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).
     }
 
     const media = await fetchOwnMedia(token);
+    const now = Date.now();
     const recent = media.filter((item) => {
       const timestamp = item.timestamp ? Date.parse(item.timestamp) : NaN;
-      return Number.isFinite(timestamp) && Date.now() - timestamp >= 0 && Date.now() - timestamp <= 24 * 60 * 60 * 1000;
+      return Number.isFinite(timestamp) && now - timestamp >= 0 && now - timestamp <= 24 * 60 * 60 * 1000;
     });
 
     let inserted = 0;
@@ -120,13 +154,13 @@ export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).
 
     for (const item of recent) {
       if (!item.permalink) continue;
-      const candidate: InstagramCandidateInput = {
+      const candidate = enrichCandidate({
         source_url: item.permalink,
         external_post_id: item.id ?? null,
         posted_at: item.timestamp ?? null,
         caption_text: item.caption ?? null,
         original_or_repost: "original",
-      };
+      });
       const pipeline = runRainEvidencePipeline(candidate);
       if (pipeline.decision === "candidate") candidates++;
       else if (pipeline.decision === "uncertain") uncertain++;
@@ -135,6 +169,15 @@ export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).
       try {
         await insertEvidence(supabaseUrl, serviceRoleKey, candidate, pipeline);
         inserted++;
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    let syncedPublicObservations = 0;
+    if (errors.length === 0) {
+      try {
+        syncedPublicObservations = await syncVerifiedObservations(supabaseUrl, serviceRoleKey);
       } catch (error) {
         errors.push(error instanceof Error ? error.message : String(error));
       }
@@ -149,6 +192,7 @@ export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).
       uncertain,
       rejected,
       inserted,
+      synced_public_observations: syncedPublicObservations,
       errors,
     };
   },
