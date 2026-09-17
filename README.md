@@ -1,26 +1,44 @@
-# Rajasthan Rain Tracker
+# Rajasthan Rain Map
 
-Build the first MVP of a mobile-first web app called “Rajasthan Rain Map”. Public user UI must be ONLY a full-screen Rajasthan map—no search history, no reels list, no technical details, no admin controls visible. The map should support district/place rain-status markers with a very clean, minimal visual style. For now use mock/sample evidence data for 17 September 2026 so the map can be tested, but architect the app for a future backend pipeline that ingests public social-media evidence and weather/rainfall data. Important data model concepts: observation_date, event_time, place, district, latitude, longitude, rain_observed, forecast_status, confidence, source_url, source_type, original_or_repost, verification_status. Separate public map UI from hidden/admin evidence data. Do not implement Instagram scraping or credential handling. Make the code production-ready, responsive on Android, and easy to connect to Supabase later. Include a small unobtrusive “Updated” timestamp on the map only.
+Mobile-first Rajasthan rain observation map. The public UI is intentionally minimal: a full-screen Rajasthan map and a small updated timestamp. Evidence and automation remain server-side.
 
-This project was built with [Lovable](https://lovable.dev).
+## Current pipeline
 
-**Live app**: https://rajasthan-rain-map.lovable.app
+`Authorized Instagram API -> 24h posted-time filter -> rain evidence checks -> Rajasthan location extraction -> evidence database -> verification -> public observation sync -> map`
 
-## Build with Lovable
+### Important verification rules
 
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/cf5d8bf1-8270-42af-8582-e2fa11b2e3f3).
+- `posted_at` is the Instagram publication time; it is **not** automatically treated as the rain event time.
+- A Reel older than 24 hours is rejected by the ingestion pipeline.
+- Explicit old/archive wording is rejected.
+- Missing or conflicting event-date evidence stays `uncertain`.
+- A Rajasthan place/district name is treated as a location clue; the current MVP maps it to a district-centre coordinate rather than pretending it is an exact GPS location.
+- Reposts remain non-public until duplicate/repost review is completed.
+- Only `verified` observations for the current India date can reach the public map.
+- The evidence table is private; public map data contains no Reel URLs, captions, speech, or internal reasoning.
 
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
+## Automation
+
+Production exposes a protected `/api/instagram/scan` endpoint. Vercel Cron is configured in `vercel.json` to call it daily. The endpoint requires the standard Vercel `CRON_SECRET` authorization header.
+
+The current authorized Instagram token is stored server-side as `INSTAGRAM_ACCESS_TOKEN`. It is never rendered into the browser.
+
+## Discovery limitation
+
+The current token has been validated and the account-media endpoint is available for the connected professional account. This does **not** by itself provide arbitrary public Instagram Reel/hashtag discovery. Public discovery must use an officially supported Meta API flow and permissions. The ingestion layer is deliberately separated from the verification layer so the discovery adapter can be replaced without rewriting the rain-verification logic.
+
+## Database
+
+Supabase stores two layers:
+
+- `instagram_rain_evidence`: private ingestion/evidence queue.
+- `rain_observations`: public-map projection. A secured database function syncs verified Instagram evidence into this table.
 
 ## Development
 
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
-
 ```sh
-git clone <this-repository-url>
-cd <repository-name>
 npm i
-npm run dev
+npm run build
 ```
+
+The project uses TanStack Start, React, Leaflet, and Supabase JS.
