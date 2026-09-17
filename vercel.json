@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/instagram/scan",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}
