@@ -19,6 +19,18 @@ async function fetchOwnMedia(token: string): Promise<InstagramMedia[]> {
   return payload.data ?? [];
 }
 
+async function loadStoredMetaConnection(supabaseUrl: string, serviceRoleKey: string): Promise<{ pageAccessToken: string; instagramUserId: string } | null> {
+  const url = new URL(`${supabaseUrl}/rest/v1/instagram_meta_connections`);
+  url.searchParams.set("select", "page_access_token,instagram_user_id");
+  url.searchParams.set("order", "updated_at.desc");
+  url.searchParams.set("limit", "1");
+  const response = await fetch(url, { headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}` }, cache: "no-store" });
+  if (!response.ok) throw new Error(`Meta connection lookup failed (${response.status}): ${await response.text()}`);
+  const rows = (await response.json()) as Array<{ page_access_token?: string; instagram_user_id?: string }>;
+  const row = rows[0];
+  return row?.page_access_token && row.instagram_user_id ? { pageAccessToken: row.page_access_token, instagramUserId: row.instagram_user_id } : null;
+}
+
 function isRecent24h(timestamp: string | null | undefined, now = Date.now()): boolean {
   if (!timestamp) return false;
   const value = Date.parse(timestamp);
@@ -34,14 +46,7 @@ function enrichCandidate(candidate: InstagramCandidateInput): InstagramCandidate
   const location = extractRajasthanLocation({ caption_text: candidate.caption_text, speech_text: candidate.speech_text, location_evidence: candidate.location_evidence });
   const district = candidate.district ?? location.district;
   const coords = districtCoordinates(district);
-  return {
-    ...candidate,
-    place: candidate.place ?? location.place,
-    district,
-    latitude: candidate.latitude ?? coords?.latitude ?? null,
-    longitude: candidate.longitude ?? coords?.longitude ?? null,
-    location_evidence: candidate.location_evidence ?? location.evidence,
-  };
+  return { ...candidate, place: candidate.place ?? location.place, district, latitude: candidate.latitude ?? coords?.latitude ?? null, longitude: candidate.longitude ?? coords?.longitude ?? null, location_evidence: candidate.location_evidence ?? location.evidence };
 }
 
 async function insertEvidence(supabaseUrl: string, serviceRoleKey: string, input: InstagramCandidateInput, pipeline: ReturnType<typeof runRainEvidencePipeline>) {
@@ -71,12 +76,20 @@ async function syncVerifiedObservations(supabaseUrl: string, serviceRoleKey: str
 
 export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).handler(async () => {
   const instagramToken = env("INSTAGRAM_ACCESS_TOKEN");
-  const facebookToken = env("META_FACEBOOK_ACCESS_TOKEN");
-  const igUserId = env("META_IG_USER_ID");
+  const configuredFacebookToken = env("META_FACEBOOK_ACCESS_TOKEN");
+  const configuredIgUserId = env("META_IG_USER_ID");
   const supabaseUrl = env("SUPABASE_URL");
   const serviceRoleKey = env("SUPABASE_SERVICE_ROLE_KEY");
-  if ((!instagramToken && !facebookToken) || !supabaseUrl || !serviceRoleKey) {
+  if ((!instagramToken && !configuredFacebookToken) || !supabaseUrl || !serviceRoleKey) {
     return { ok: false, error: !supabaseUrl || !serviceRoleKey ? "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not configured on the server." : "No Instagram discovery token is configured on the server." };
+  }
+
+  let facebookToken = configuredFacebookToken;
+  let igUserId = configuredIgUserId;
+  if ((!facebookToken || !igUserId) && supabaseUrl && serviceRoleKey) {
+    const stored = await loadStoredMetaConnection(supabaseUrl, serviceRoleKey);
+    facebookToken ??= stored?.pageAccessToken;
+    igUserId ??= stored?.instagramUserId;
   }
 
   let media: InstagramMedia[] = [];
