@@ -31,6 +31,30 @@ export const getInstagramAuthorizeUrl = createServerFn({ method: "GET" }).handle
   },
 );
 
+async function readInstagramProfile(accessToken: string) {
+  const url = new URL(INSTAGRAM_GRAPH_URL);
+  url.searchParams.set("fields", "id,username");
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
+
+  const payload = (await response.json()) as {
+    id?: string;
+    username?: string;
+    error?: { message?: string };
+  };
+
+  if (!response.ok || !payload.id) {
+    throw new Error(
+      payload.error?.message || `Instagram API returned ${response.status}.`,
+    );
+  }
+
+  return { userId: payload.id, username: payload.username };
+}
+
 export const verifyConfiguredInstagramToken = createServerFn({ method: "GET" }).handler(
   async (): Promise<{
     configured: boolean;
@@ -42,40 +66,16 @@ export const verifyConfiguredInstagramToken = createServerFn({ method: "GET" }).
     const accessToken = getEnv("INSTAGRAM_ACCESS_TOKEN");
 
     if (!accessToken) {
-      return { configured: false, valid: false, error: "INSTAGRAM_ACCESS_TOKEN is not configured." };
+      return {
+        configured: false,
+        valid: false,
+        error: "INSTAGRAM_ACCESS_TOKEN is not configured.",
+      };
     }
 
-    const url = new URL(INSTAGRAM_GRAPH_URL);
-    url.searchParams.set("fields", "id,username");
-
     try {
-      const response = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        cache: "no-store",
-      });
-
-      const payload = (await response.json()) as {
-        id?: string;
-        username?: string;
-        error?: { message?: string };
-      };
-
-      if (!response.ok || !payload.id) {
-        return {
-          configured: true,
-          valid: false,
-          error: payload.error?.message || `Instagram API returned ${response.status}.`,
-        };
-      }
-
-      return {
-        configured: true,
-        valid: true,
-        userId: payload.id,
-        username: payload.username,
-      };
+      const profile = await readInstagramProfile(accessToken);
+      return { configured: true, valid: true, ...profile };
     } catch (error) {
       return {
         configured: true,
@@ -99,7 +99,7 @@ export const exchangeInstagramCode = createServerFn({ method: "POST" })
 
     return { code: code.trim() };
   })
-  .handler(async ({ data }): Promise<{ accessToken: string; userId?: string }> => {
+  .handler(async ({ data }): Promise<{ userId: string; username?: string }> => {
     const clientId = getEnv("INSTAGRAM_CLIENT_ID");
     const clientSecret = getEnv("INSTAGRAM_CLIENT_SECRET");
     const redirectUri = getEnv("INSTAGRAM_REDIRECT_URI");
@@ -124,10 +124,8 @@ export const exchangeInstagramCode = createServerFn({ method: "POST" })
 
     const payload = (await response.json()) as {
       access_token?: string;
-      user_id?: string;
       error_message?: string;
       error_type?: string;
-      code?: number;
     };
 
     if (!response.ok || !payload.access_token) {
@@ -137,8 +135,6 @@ export const exchangeInstagramCode = createServerFn({ method: "POST" })
       );
     }
 
-    return {
-      accessToken: payload.access_token,
-      userId: payload.user_id,
-    };
+    // Never send the access token to the browser. Verify it server-side and discard it.
+    return readInstagramProfile(payload.access_token);
   });
