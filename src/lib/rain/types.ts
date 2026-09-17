@@ -1,9 +1,8 @@
 /**
  * Core data model for Rajasthan Rain Map.
  *
- * `RainEvidence` is the INTERNAL (admin / pipeline) record. It is never sent to
- * the public map. A future backend pipeline (Supabase table `rain_evidence`)
- * will write rows in exactly this shape.
+ * `RainEvidence` is the INTERNAL (admin / pipeline) record, mirroring the
+ * Supabase table `public.rain_observations`. It is never sent to the public map.
  *
  * `PublicRainPoint` is the sanitised projection that the public map consumes.
  */
@@ -49,9 +48,13 @@ export interface PublicRainPoint {
   status: RainStatus;
 }
 
+export type SnapshotState = "ok" | "empty" | "error";
+
 export interface PublicRainSnapshot {
   observation_date: string;
   /** ISO datetime the snapshot was generated. */
   updated_at: string;
   points: PublicRainPoint[];
+  /** Coarse state for the UI. Carries no technical detail. */
+  state: SnapshotState;
 }

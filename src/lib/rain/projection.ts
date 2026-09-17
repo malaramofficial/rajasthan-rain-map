@@ -10,15 +10,27 @@ function statusFor(evidence: RainEvidence): RainStatus {
   return "dry";
 }
 
+function isPlottable(e: RainEvidence): boolean {
+  return (
+    typeof e.latitude === "number" &&
+    typeof e.longitude === "number" &&
+    Number.isFinite(e.latitude) &&
+    Number.isFinite(e.longitude)
+  );
+}
+
 /**
  * Strips every internal field (source_url, verification_status, confidence...)
- * and keeps only what the public map renders. Rejected or low-confidence
- * evidence never reaches the public layer.
+ * and keeps only what the public map renders. Rejected, low-confidence or
+ * un-mappable evidence never reaches the public layer.
  */
 export function toPublicPoints(evidence: RainEvidence[]): PublicRainPoint[] {
   return evidence
     .filter(
-      (e) => e.verification_status !== "rejected" && e.confidence >= MIN_CONFIDENCE,
+      (e) =>
+        e.verification_status !== "rejected" &&
+        (e.confidence ?? 1) >= MIN_CONFIDENCE &&
+        isPlottable(e),
     )
     .map((e) => ({
       id: e.id,

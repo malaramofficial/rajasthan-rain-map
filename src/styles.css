@@ -168,9 +168,14 @@
   fill: var(--rain-recent);
 }
 
+/* Forecast is deliberately hollow + dashed so it never reads as observed rain */
 .rain-marker--forecast {
   fill: var(--rain-forecast);
+  fill-opacity: 0.14;
+  stroke: var(--rain-forecast);
+  stroke-dasharray: 3 3;
 }
+
 
 .rain-marker--dry {
   fill: var(--rain-dry);
