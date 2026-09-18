@@ -49,7 +49,7 @@ function enrichCandidate(candidate: InstagramCandidateInput): InstagramCandidate
   return { ...candidate, place: candidate.place ?? location.place, district, latitude: candidate.latitude ?? coords?.latitude ?? null, longitude: candidate.longitude ?? coords?.longitude ?? null, location_evidence: candidate.location_evidence ?? location.evidence };
 }
 
-async function insertEvidence(supabaseUrl: string, serviceRoleKey: string, input: InstagramCandidateInput, pipeline: ReturnType<typeof runRainEvidencePipeline>) {
+async function insertEvidence(supabaseUrl: string, serviceRoleKey: string, input: InstagramCandidateInput, pipeline: { rain_observed: boolean; verification_status: "pending" | "uncertain" | "rejected" | "verified"; confidence: number; rejection_reason: string | null }) {
   const response = await fetch(`${supabaseUrl}/rest/v1/instagram_rain_evidence?on_conflict=source_url`, {
     method: "POST",
     headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
