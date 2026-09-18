@@ -217,19 +217,15 @@ func main() {
 			url := e.Response.URL
 			if strings.Contains(url, "/api/graphql") || strings.Contains(url, "/graphql/query") {
 				go func(requestID network.RequestID, responseURL string) {
-					var result *network.GetResponseBodyReturnParams
-					if err := chromedp.Run(ctx, network.GetResponseBody(requestID), chromedp.ActionFunc(func(ctx context.Context) error {
-						var err error
-						result, err = network.GetResponseBody(requestID).Do(ctx)
-						return err
-					})); err != nil {
+					bodyBytes, err := network.GetResponseBody(requestID).Do(ctx)
+					if err != nil {
 						log.Printf("NETWORK BODY ERROR: %v url=%s", err, responseURL)
 						return
 					}
-					if result == nil || result.Body == "" {
+					body := string(bodyBytes)
+					if body == "" {
 						return
 					}
-					body := result.Body
 					if strings.Contains(body, "media") || strings.Contains(body, "xdt_") || strings.Contains(body, "shortcode") {
 						log.Printf("NETWORK GRAPHQL RESPONSE: bytes=%d url=%s", len(body), responseURL)
 						if len(body) <= 2000 {
