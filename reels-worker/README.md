@@ -31,3 +31,7 @@ Browser खुलेगा। उसमें Instagram login करें (य�
 ## Data flow
 
 Instagram browser → Reels GraphQL response capture → 24h filter → AI rain check → Rajasthan location extraction → event-date check → duplicate/repost check → Supabase evidence → verified public observation → map.
+
+
+## Current status
+The browser worker is prepared for the next live capture test. It now supports a configurable visible/headless browser mode and protects its in-memory Reel de-duplication map against concurrent capture callbacks.
