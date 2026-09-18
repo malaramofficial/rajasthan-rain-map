@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,7 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chromedp/cdproto/fetch"
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
@@ -121,73 +121,113 @@ func postBatch(media []Media) error {
 }
 
 func main() {
-	userDataDir := os.Getenv("INSTAGRAM_CHROME_PROFILE")
-	if userDataDir == "" {
-		userDataDir = "./instagram-profile"
+	wsURL := os.Getenv("CHROME_CDP_URL")
+	if wsURL == "" {
+		wsURL = "ws://127.0.0.1:9222"
 	}
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.UserDataDir(userDataDir),
-		chromedp.Flag("headless", strings.EqualFold(os.Getenv("INSTAGRAM_HEADLESS"), "true")),
-	)
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
+
+	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), wsURL)
 	defer allocCancel()
+
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	defer cancel()
 
-	seen := map[string]bool{}
+	seen := make(map[string]bool)
 	var seenMu sync.Mutex
+
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
-		e, ok := ev.(*fetch.EventRequestPaused)
-		if !ok {
+		e, ok := ev.(*runtime.EventBindingCalled)
+		if !ok || e.Name != "reelsGraphQL" {
 			return
 		}
-		go func() {
-			defer func() { _ = chromedp.Run(ctx, fetch.ContinueRequest(e.RequestID)) }()
-			var body []byte
-			if err := chromedp.Run(ctx, chromedp.ActionFunc(func(c context.Context) error {
-				data, err := fetch.GetResponseBody(e.RequestID).Do(c)
-				if err != nil {
-					return err
-				}
-				body = data
-				return nil
-			})); err != nil {
-				return
+
+		body := e.Payload
+		log.Printf("GRAPHQL BINDING: bytes=%d", len(body))
+
+		if !strings.Contains(body, "xdt_api__v1__clips__home__connection_v2") {
+			return
+		}
+
+		media := capture(body)
+		log.Printf("CAPTURED REELS: %d", len(media))
+
+		for _, m := range media {
+			seenMu.Lock()
+			alreadySeen := seen[m.ExternalPostID]
+			if !alreadySeen {
+				seen[m.ExternalPostID] = true
 			}
-			bodyText := string(body)
-			if !strings.Contains(bodyText, "xdt_api__v1__clips__home__connection_v2") {
-				return
+			seenMu.Unlock()
+
+			if alreadySeen {
+				continue
 			}
-			_ = decodePostData(e)
-			for _, media := range capture(bodyText) {
-				seenMu.Lock()
-				alreadySeen := seen[media.ExternalPostID]
-				if !alreadySeen {
-					seen[media.ExternalPostID] = true
-				}
-				seenMu.Unlock()
-				if alreadySeen {
-					continue
-				}
-				log.Printf("captured reel %s @%s", media.SourceURL, media.Username)
-				if err := postBatch([]Media{media}); err != nil {
-					log.Printf("ingest: %v", err)
-				}
+
+			log.Printf("REEL: id=%s user=%s url=%s", m.ExternalPostID, m.Username, m.SourceURL)
+			if err := postBatch([]Media{m}); err != nil {
+				log.Printf("ingest: %v", err)
+			} else {
+				log.Printf("INGEST OK: %s", m.ExternalPostID)
 			}
-		}()
+		}
 	})
 
-	if err := chromedp.Run(ctx,
-		fetch.Enable().WithPatterns([]*fetch.RequestPattern{{
-			URLPattern: "*graphql*",
-			RequestStage: fetch.RequestStageResponse,
-		}}),
-		chromedp.Navigate("https://www.instagram.com/reels/"),
-	); err != nil {
+	hook := `(function() {
+		if (window.__reelsHookInstalled) return;
+		window.__reelsHookInstalled = true;
+
+		function send(url, response) {
+			try {
+				if (!url || (!url.includes("/api/graphql") && !url.includes("/graphql/query"))) return;
+				response.clone().text().then(function(body) {
+					if (body && typeof window.reelsGraphQL === "function") window.reelsGraphQL(body);
+				}).catch(function() {});
+			} catch (_) {}
+		}
+
+		const originalFetch = window.fetch;
+		window.fetch = async function(...args) {
+			const response = await originalFetch.apply(this, args);
+			const request = args[0];
+			const url = typeof request === "string" ? request : (request && request.url) || "";
+			send(url, response);
+			return response;
+		};
+
+		const originalOpen = XMLHttpRequest.prototype.open;
+		const originalSend = XMLHttpRequest.prototype.send;
+		XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+			this.__reelsURL = String(url || "");
+			return originalOpen.call(this, method, url, ...rest);
+		};
+		XMLHttpRequest.prototype.send = function(...args) {
+			this.addEventListener("load", function() {
+				try {
+					const url = this.__reelsURL || this.responseURL || "";
+					if (!url.includes("/api/graphql") && !url.includes("/graphql/query")) return;
+					const body = typeof this.responseText === "string" ? this.responseText : "";
+					if (body && typeof window.reelsGraphQL === "function") window.reelsGraphQL(body);
+				} catch (_) {}
+			});
+			return originalSend.apply(this, args);
+		};
+	})();`
+
+	if err := chromedp.Run(ctx, runtime.Enable(), runtime.AddBinding("reelsGraphQL")); err != nil {
 		log.Fatal(err)
 	}
 
-	log.Println("Reels passive capture worker is running. Log into Instagram in the opened browser if needed.")
+	if _, err := page.AddScriptToEvaluateOnNewDocument(hook).Do(ctx); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := chromedp.Run(ctx, chromedp.Evaluate(hook, nil), chromedp.Navigate("https://www.instagram.com/reels/")); err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println("Reels passive capture worker is running.")
+	log.Println("Instagram Reels feed is open in the attached Chromium browser.")
+
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
