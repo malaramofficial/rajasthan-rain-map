@@ -222,15 +222,20 @@ func main() {
 		if len(body) <= 1000 {
 			log.Printf("GRAPHQL BODY: %q", body)
 		} else {
-			// Keep a compact fingerprint of larger responses so we can diagnose
-			// which GraphQL operation is actually reaching the worker without
-			// flooding the terminal with full response bodies.
-			if i := strings.Index(body, "xdt_api__v1__"); i >= 0 {
-				end := i + 120
-				if end > len(body) {
-					end = len(body)
+			// Log compact hints from larger responses so we can discover the
+			// current Instagram response shape without dumping full payloads.
+			for _, marker := range []string{"xdt_", "media", "code", "video_versions", "image_versions2", "shortcode"} {
+				if i := strings.Index(body, marker); i >= 0 {
+					start := i - 60
+					if start < 0 {
+						start = 0
+					}
+					end := i + 180
+					if end > len(body) {
+						end = len(body)
+					}
+					log.Printf("GRAPHQL HINT %s: %q", marker, body[start:end])
 				}
-				log.Printf("GRAPHQL KEY HINT: %q", body[i:end])
 			}
 		}
 
