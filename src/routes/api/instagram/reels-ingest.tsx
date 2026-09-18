@@ -1,4 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { extractRajasthanLocation, districtCoordinates } from "@/lib/instagram/rajasthan-location";
+import { verifyRainVisualWithOpenAI } from "@/lib/instagram/rain-ai-verifier";
+import { extractExplicitEventDate, runRainEvidencePipeline, type InstagramCandidateInput } from "@/lib/instagram/rain-pipeline";
 
 type ReelsWorkerMedia = {
   external_post_id: string;
@@ -10,85 +13,107 @@ type ReelsWorkerMedia = {
   username: string | null;
 };
 
+async function hashRemoteImage(imageUrl: string | null | undefined): Promise<string | null> {
+  if (!imageUrl) return null;
+  try {
+    const response = await fetch(imageUrl, { cache: "no-store" });
+    if (!response.ok) return null;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength === 0 || bytes.byteLength > 8 * 1024 * 1024) return null;
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  } catch { return null; }
+}
+
+async function findDuplicate(supabaseUrl: string, key: string, hash: string) {
+  const url = new URL(supabaseUrl + "/rest/v1/instagram_rain_evidence");
+  url.searchParams.set("select", "id,duplicate_group_id");
+  url.searchParams.set("content_hash", "eq." + hash);
+  url.searchParams.set("limit", "1");
+  const response = await fetch(url, { headers: { apikey: key, Authorization: "Bearer " + key }, cache: "no-store" });
+  if (!response.ok) return null;
+  const rows = await response.json() as Array<{ id?: string; duplicate_group_id?: string | null }>;
+  return rows[0]?.id ? rows[0] : null;
+}
+
+function repostSignal(text: string | null) {
+  const value = (text ?? "").toLowerCase();
+  return ["repost", "reposted", "credit to", "credits:", "via ", "old video", "पुराना वीडियो", "साभार"].some((term) => value.includes(term));
+}
+
 export const Route = createFileRoute("/api/instagram/reels-ingest")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const expectedSecret = process.env["REELS_WORKER_SECRET"];
-        const authorization = request.headers.get("authorization");
-
-        if (!expectedSecret || authorization !== `Bearer ${expectedSecret}`) {
-          return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
-            status: 401,
-            headers: { "content-type": "application/json", "cache-control": "no-store" },
-          });
+        const expectedSecret = process.env["REELS_WORKER_SECRET"] ?? process.env["CRON_SECRET"];
+        if (!expectedSecret || request.headers.get("authorization") !== `Bearer ${expectedSecret}`) {
+          return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), { status: 401, headers: { "content-type": "application/json", "cache-control": "no-store" } });
         }
-
         try {
-          const body = (await request.json()) as { media?: ReelsWorkerMedia[] };
-          const media = Array.isArray(body.media) ? body.media : [];
+          const body = await request.json() as { media?: ReelsWorkerMedia[] };
+          const media = Array.isArray(body.media) ? body.media.slice(0, 100) : [];
           const supabaseUrl = process.env["SUPABASE_URL"];
           const serviceRoleKey = process.env["SUPABASE_SERVICE_ROLE_KEY"];
+          if (!supabaseUrl || !serviceRoleKey) throw new Error("Supabase server configuration is missing.");
 
-          if (!supabaseUrl || !serviceRoleKey) {
-            return new Response(JSON.stringify({ ok: false, error: "Supabase server configuration is missing." }), {
-              status: 500,
-              headers: { "content-type": "application/json", "cache-control": "no-store" },
-            });
-          }
+          let recent = 0, processed = 0, aiChecked = 0, aiConfirmed = 0, verified = 0, uncertain = 0, rejected = 0, inserted = 0;
+          for (const item of media) {
+            const posted = item.posted_at ? Date.parse(item.posted_at) : NaN;
+            if (!Number.isFinite(posted) || Date.now() - posted < 0 || Date.now() - posted > 24 * 60 * 60 * 1000) continue;
+            recent++;
+            if (!item.source_url || !item.external_post_id) continue;
+            processed++;
 
-          const recent = media
-            .filter((item) => item?.source_url && item?.external_post_id)
-            .filter((item) => {
-              const posted = item.posted_at ? Date.parse(item.posted_at) : NaN;
-              return Number.isFinite(posted) && Date.now() - posted >= 0 && Date.now() - posted <= 24 * 60 * 60 * 1000;
-            })
-            .slice(0, 100);
+            let visualAnalysis: string | null = null;
+            let rainObservedOverride = false;
+            try {
+              const ai = await verifyRainVisualWithOpenAI({ imageUrl: item.thumbnail_url ?? null, caption: item.caption_text });
+              if (ai) { aiChecked++; visualAnalysis = ai.visual_analysis; rainObservedOverride = ai.rain_observed && ai.confidence >= 0.75; if (rainObservedOverride) aiConfirmed++; }
+            } catch (error) { console.error("Reels worker AI verification failed", error); }
 
-          const inserted: string[] = [];
-          for (const item of recent) {
-            const response = await fetch(`${supabaseUrl}/rest/v1/instagram_rain_evidence?on_conflict=source_url`, {
+            const location = extractRajasthanLocation({ caption_text: item.caption_text, speech_text: null, location_evidence: item.username ? `instagram_user:${item.username}` : null });
+            const coords = districtCoordinates(location.district);
+            const candidate: InstagramCandidateInput = {
+              source_url: item.source_url, external_post_id: item.external_post_id, posted_at: item.posted_at,
+              event_date: extractExplicitEventDate(item.caption_text), caption_text: item.caption_text, visual_analysis: visualAnalysis,
+              original_or_repost: repostSignal(item.caption_text) ? "repost" : "unknown",
+              place: location.place, district: location.district, latitude: coords?.latitude ?? null, longitude: coords?.longitude ?? null,
+              location_evidence: location.evidence ?? (item.username ? `instagram_user:${item.username}` : null),
+            };
+            const contentHash = await hashRemoteImage(item.thumbnail_url);
+            const duplicate = contentHash ? await findDuplicate(supabaseUrl, serviceRoleKey, contentHash) : null;
+            if (duplicate) candidate.original_or_repost = "repost";
+
+            const pipeline = runRainEvidencePipeline(candidate);
+            const effective = rainObservedOverride && pipeline.decision !== "rejected"
+              ? { ...pipeline, rain_observed: true, verification_status: pipeline.decision === "candidate" && pipeline.reasons.includes("rajasthan_location_verified") && candidate.original_or_repost !== "repost" ? "verified" as const : pipeline.verification_status, confidence: Math.max(pipeline.confidence, 0.75) }
+              : pipeline;
+
+            const response = await fetch(supabaseUrl + "/rest/v1/instagram_rain_evidence?on_conflict=source_url", {
               method: "POST",
-              headers: {
-                apikey: serviceRoleKey,
-                Authorization: `Bearer ${serviceRoleKey}`,
-                "Content-Type": "application/json",
-                Prefer: "resolution=merge-duplicates,return=minimal",
-              },
+              headers: { apikey: serviceRoleKey, Authorization: "Bearer " + serviceRoleKey, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
               body: JSON.stringify({
-                platform: "instagram",
-                external_post_id: item.external_post_id,
-                source_url: item.source_url,
-                posted_at: item.posted_at,
-                caption_text: item.caption_text,
-                visual_analysis: "reels_worker_passive_feed_capture",
-                location_evidence: item.username ? `instagram_user:${item.username}` : null,
-                verification_status: "pending",
-                original_or_repost: "unknown",
-                updated_at: new Date().toISOString(),
+                platform: "instagram", external_post_id: candidate.external_post_id, source_url: candidate.source_url,
+                posted_at: candidate.posted_at, event_date: candidate.event_date, place: candidate.place, district: candidate.district,
+                latitude: candidate.latitude, longitude: candidate.longitude, caption_text: candidate.caption_text, visual_analysis: candidate.visual_analysis,
+                location_evidence: candidate.location_evidence, rain_observed: effective.rain_observed, original_or_repost: candidate.original_or_repost,
+                duplicate_group_id: duplicate?.duplicate_group_id ?? duplicate?.id ?? null, content_hash: contentHash,
+                verification_status: effective.verification_status, confidence: effective.confidence, rejection_reason: effective.rejection_reason, updated_at: new Date().toISOString(),
               }),
             });
-
-            if (response.ok) inserted.push(item.external_post_id);
+            if (!response.ok) { rejected++; console.error("Reels evidence insert failed", await response.text()); continue; }
+            inserted++;
+            if (effective.verification_status === "verified") verified++; else if (effective.verification_status === "uncertain") uncertain++; else rejected++;
           }
 
-          return new Response(JSON.stringify({
-            ok: true,
-            received: media.length,
-            recent_24h: recent.length,
-            inserted: inserted.length,
-          }), {
-            status: 200,
-            headers: { "content-type": "application/json", "cache-control": "no-store" },
-          });
+          let synced = 0;
+          if (inserted > 0) {
+            const response = await fetch(supabaseUrl + "/rest/v1/rpc/sync_verified_instagram_observations", { method: "POST", headers: { apikey: serviceRoleKey, Authorization: "Bearer " + serviceRoleKey, "Content-Type": "application/json" }, body: "{}" });
+            if (response.ok) synced = Number(await response.json()) || 0;
+          }
+          return new Response(JSON.stringify({ ok: true, received: media.length, recent_24h: recent, processed, ai_checked: aiChecked, ai_confirmed: aiConfirmed, verified, uncertain, rejected, inserted, synced_public_observations: synced }), { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
         } catch (error) {
-          return new Response(JSON.stringify({
-            ok: false,
-            error: error instanceof Error ? error.message : "Invalid request",
-          }), {
-            status: 400,
-            headers: { "content-type": "application/json", "cache-control": "no-store" },
-          });
+          return new Response(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : "Invalid request" }), { status: 400, headers: { "content-type": "application/json", "cache-control": "no-store" } });
         }
       },
     },
