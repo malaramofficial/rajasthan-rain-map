@@ -14,9 +14,16 @@ const GRAPH_VERSION = process.env["META_GRAPH_VERSION"] ?? "v25.0";
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
 const RAIN_HASHTAGS = [
-  "rajasthanbarish", "rajasthanrain", "राजस्थानबारिश", "राजस्थानबरसात",
-  "barishrajasthan", "monsoonrajasthan", "jaipurbarish", "jodhpurbarish",
-  "udaipurbarish", "kotabarish", "bikanerbarish", "barmerbarish",
+  "barish", "baarish", "rain", "rains", "rainfall", "monsoon", "barsaat", "baarish2026",
+  "heavyrain", "rainstorm", "rainalert", "rainnews", "rainupdate", "weatherupdate",
+  "jaipurbarish", "jodhpurbarish", "udaipurbarish", "kotabarish", "bikanerbarish", "barmerbarish",
+  "delhibarish", "mumbaibarish", "punebarish", "ahmedabadbarish", "suratbarish", "vadodarabarish",
+  "indorebarish", "bhopalbarish", "lucknowbarish", "varanasibarish", "patnabarish", "ranchibarish",
+  "kolkatabarish", "bhubaneswarbarish", "guwahatibarish", "chennaibarish", "hyderabadbarish",
+  "bangalorebarish", "bengalurubarish", "kochi-rain", "thiruvananthapurambarish", "goabarish",
+  "nagpurbarish", "nashikbarish", "agra-barish", "dehradunbarish", "chandigarhbarish",
+  "srinagarbarish", "amritsarbarish", "jammubarish", "rajasthanbarish", "rajasthanrain",
+  "rajastanbarish", "barishrajasthan", "monsoonrajasthan"
 ];
 
 async function graphGet(path: string, token: string, params: Record<string, string>): Promise<any> {
@@ -29,7 +36,7 @@ async function graphGet(path: string, token: string, params: Record<string, stri
   return body;
 }
 
-const MAX_PAGES_PER_HASHTAG = 3;
+const MAX_PAGES_PER_HASHTAG = 1;
 const MAX_MEDIA_PER_HASHTAG = 150;
 
 function isReelMedia(item: DiscoveredInstagramMedia): boolean {
