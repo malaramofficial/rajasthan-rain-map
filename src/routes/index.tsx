@@ -2,7 +2,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ClientOnly } from "@tanstack/react-router";
 import { lazy, Suspense, useEffect } from "react";
 
-import InstagramConnect from "@/components/instagram/InstagramConnect";
 import { getPublicRainSnapshot } from "@/lib/rain/rain.functions";
 
 const RainMap = lazy(() => import("@/components/map/RainMap"));
@@ -57,7 +56,6 @@ function RainMapPage() {
         </Suspense>
       </ClientOnly>
 
-      <InstagramConnect />
 
       <p
         className="pointer-events-none absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-1/2 z-[1000] -translate-x-1/2 rounded-full bg-card/85 px-3 py-1 text-[11px] font-medium tracking-wide text-muted-foreground shadow-sm backdrop-blur-sm"
