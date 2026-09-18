@@ -36,6 +36,7 @@ type reelResponse struct {
 						PK          string `json:"pk"`
 						TakenAt     int64  `json:"taken_at"`
 						Code        string `json:"code"`
+						ImageVersions2 *struct { Candidates []struct { URL string `json:"url"` } `json:"candidates"` } `json:"image_versions2"`
 						Caption     *struct{ Text string `json:"text"` } `json:"caption"`
 						Video       []struct{ URL string `json:"url"` } `json:"video_versions"`
 						User        struct{ Username string `json:"username"` } `json:"user"`
@@ -73,6 +74,9 @@ func capture(body string) []Media {
 		}
 		if m.TakenAt > 0 {
 			item.PostedAt = time.Unix(m.TakenAt, 0).UTC().Format(time.RFC3339)
+		}
+		if m.ImageVersions2 != nil && len(m.ImageVersions2.Candidates) > 0 {
+			item.ThumbnailURL = m.ImageVersions2.Candidates[0].URL
 		}
 		if m.Caption != nil {
 			item.CaptionText = m.Caption.Text
