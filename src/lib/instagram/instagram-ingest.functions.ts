@@ -88,7 +88,7 @@ async function finishScanRun(
   });
 }
 
-async function insertEvidence(supabaseUrl: string, serviceRoleKey: string, input: InstagramCandidateInput, pipeline: { rain_observed: boolean; verification_status: "pending" | "uncertain" | "rejected" | "verified"; confidence: number; rejection_reason: string | null }) {
+async function insertEvidence(supabaseUrl: string, serviceRoleKey: string, input: InstagramCandidateInput, pipeline: { rain_observed: boolean; verification_status: "pending" | "uncertain" | "rejected" | "verified"; confidence: number; rejection_reason: string | null }, contentHash: string | null, duplicateGroupId: string | null) {
   const response = await fetch(`${supabaseUrl}/rest/v1/instagram_rain_evidence?on_conflict=source_url`, {
     method: "POST",
     headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
@@ -98,11 +98,36 @@ async function insertEvidence(supabaseUrl: string, serviceRoleKey: string, input
       place: input.place ?? null, district: input.district ?? null, latitude: input.latitude ?? null, longitude: input.longitude ?? null,
       caption_text: input.caption_text ?? null, speech_text: input.speech_text ?? null, visual_analysis: input.visual_analysis ?? null,
       location_evidence: input.location_evidence ?? null, rain_observed: pipeline.rain_observed,
-      original_or_repost: input.original_or_repost ?? "unknown", verification_status: pipeline.verification_status,
+      original_or_repost: input.original_or_repost ?? "unknown", duplicate_group_id: duplicateGroupId, content_hash: contentHash, verification_status: pipeline.verification_status,
       confidence: pipeline.confidence, rejection_reason: pipeline.rejection_reason, updated_at: new Date().toISOString(),
     }),
   });
   if (!response.ok) throw new Error(`Supabase evidence insert failed (${response.status}): ${await response.text()}`);
+}
+
+async function hashRemoteImage(imageUrl: string | null | undefined): Promise<string | null> {
+  if (!imageUrl) return null;
+  try {
+    const response = await fetch(imageUrl, { cache: "no-store" });
+    if (!response.ok) return null;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength === 0 || bytes.byteLength > 8 * 1024 * 1024) return null;
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return null;
+  }
+}
+
+async function findDuplicateEvidence(supabaseUrl: string, serviceRoleKey: string, contentHash: string): Promise<{ id: string; duplicate_group_id?: string | null } | null> {
+  const url = new URL(supabaseUrl + "/rest/v1/instagram_rain_evidence");
+  url.searchParams.set("select", "id,duplicate_group_id");
+  url.searchParams.set("content_hash", "eq." + contentHash);
+  url.searchParams.set("limit", "1");
+  const response = await fetch(url, { headers: { apikey: serviceRoleKey, Authorization: "Bearer " + serviceRoleKey }, cache: "no-store" });
+  if (!response.ok) return null;
+  const rows = (await response.json()) as Array<{ id?: string; duplicate_group_id?: string | null }>;
+  return rows[0]?.id ? { id: rows[0].id, duplicate_group_id: rows[0].duplicate_group_id ?? null } : null;
 }
 
 async function syncVerifiedObservations(supabaseUrl: string, serviceRoleKey: string): Promise<number> {
@@ -157,6 +182,10 @@ export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).
       original_or_repost: repostSignal(item.caption) ? "repost" : "unknown",
       location_evidence: item.discovery_hashtag ?? null,
     });
+    const contentHash = await hashRemoteImage(item.thumbnail_url ?? item.media_url);
+    const duplicate = contentHash ? await findDuplicateEvidence(supabaseUrl, serviceRoleKey, contentHash) : null;
+    if (duplicate) candidate.original_or_repost = "repost";
+
     const pipeline = runRainEvidencePipeline(candidate);
     const canAutoVerify =
       rainObservedOverride &&
@@ -176,7 +205,7 @@ export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).
         }
       : pipeline;
     if (effectivePipeline.decision === "candidate") candidates++; else if (effectivePipeline.decision === "uncertain") uncertain++; else rejected++;
-    try { await insertEvidence(supabaseUrl, serviceRoleKey, candidate, effectivePipeline); inserted++; }
+    try { await insertEvidence(supabaseUrl, serviceRoleKey, candidate, effectivePipeline, contentHash, duplicate?.duplicate_group_id ?? duplicate?.id ?? null); inserted++; }
     catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
   }
 
