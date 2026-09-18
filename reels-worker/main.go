@@ -210,8 +210,12 @@ func main() {
 
 		body := e.Payload
 		log.Printf("GRAPHQL BINDING: bytes=%d", len(body))
+		if len(body) <= 1000 {
+			log.Printf("GRAPHQL BODY: %q", body)
+		}
 
 		if !strings.Contains(body, "xdt_api__v1__clips__home__connection_v2") {
+			log.Printf("GRAPHQL: expected reels connection key not found")
 			return
 		}
 
