@@ -146,10 +146,40 @@ export const exchangeFacebookBusinessCode = createServerFn({ method: "POST" })
     pagesUrl.searchParams.set("fields", "name,access_token,tasks,instagram_business_account");
     pagesUrl.searchParams.set("access_token", tokenPayload.access_token);
     const pagesResponse = await fetch(pagesUrl, { cache: "no-store" });
-    const pagesPayload = (await pagesResponse.json()) as { data?: Array<{ id?: string; name?: string; access_token?: string; instagram_business_account?: { id?: string } }>; error?: { message?: string } };
+    const pagesPayload = (await pagesResponse.json()) as { data?: Array<{ id?: string; name?: string; access_token?: string; tasks?: string[]; instagram_business_account?: { id?: string } }>; error?: { message?: string } };
     if (!pagesResponse.ok) throw new Error(pagesPayload.error?.message || `Meta Page lookup failed (${pagesResponse.status}).`);
-    const page = (pagesPayload.data ?? []).find((item) => item.id && item.access_token && item.instagram_business_account?.id);
-    if (!page?.id || !page.access_token || !page.instagram_business_account?.id) throw new Error("कोई ऐसा Facebook Page नहीं मिला जो Professional Instagram Account से linked हो।");
+
+    const pages = pagesPayload.data ?? [];
+    const linkedPages = pages.filter((item) => item.id && item.instagram_business_account?.id);
+
+    // Facebook Login for Business can return the selected Page/Instagram asset
+    // while the Page access token is not included in the first /me/accounts payload.
+    // Meta documents a second, direct Page lookup that returns the Page token.
+    let page = linkedPages.find((item) => item.id && item.access_token && item.instagram_business_account?.id);
+
+    if (!page?.id || !page.instagram_business_account?.id || !page.access_token) {
+      const candidate = linkedPages.find((item) => item.id && item.instagram_business_account?.id);
+      if (candidate?.id) {
+        const pageUrl = new URL(`${META_GRAPH_BASE}/${candidate.id}`);
+        pageUrl.searchParams.set("fields", "id,name,access_token,tasks,instagram_business_account");
+        pageUrl.searchParams.set("access_token", tokenPayload.access_token);
+        const pageResponse = await fetch(pageUrl, { cache: "no-store" });
+        const pagePayload = (await pageResponse.json()) as { id?: string; name?: string; access_token?: string; tasks?: string[]; instagram_business_account?: { id?: string }; error?: { message?: string } };
+        if (!pageResponse.ok) {
+          throw new Error(pagePayload.error?.message || `Facebook Page detail lookup failed (${pageResponse.status}).`);
+        }
+        page = pagePayload;
+      }
+    }
+
+    if (!page?.id || !page.access_token || !page.instagram_business_account?.id) {
+      const pageCount = pages.length;
+      const linkedCount = linkedPages.length;
+      const tokenCount = pages.filter((item) => Boolean(item.access_token)).length;
+      throw new Error(
+        `Meta authorization सफल हुआ, लेकिन Page connection data अधूरा मिला। Pages=${pageCount}, linked Instagram Pages=${linkedCount}, Page access tokens=${tokenCount}. कृपया इसी Meta account से selected Page/Instagram को रहने दें और फिर Connect दोबारा चलाएँ।`,
+      );
+    }
 
     const igUrl = new URL(`${META_GRAPH_BASE}/${page.instagram_business_account.id}`);
     igUrl.searchParams.set("fields", "id,username,name");
