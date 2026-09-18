@@ -167,6 +167,11 @@ func main() {
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	defer cancel()
 
+	// Ensure the remote allocator has an active page target before Runtime/Page commands. This avoids CDP "invalid context".
+	if err := chromedp.Run(ctx, chromedp.Navigate("about:blank")); err != nil {
+		log.Fatalf("create browser page: %v", err)
+	}
+
 	seen := make(map[string]bool)
 	var seenMu sync.Mutex
 
