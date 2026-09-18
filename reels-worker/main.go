@@ -281,14 +281,17 @@ func main() {
 		};
 	})();`
 
+	log.Println("Enabling runtime and adding binding...")
 	if err := chromedp.Run(ctx, runtime.Enable(), runtime.AddBinding("reelsGraphQL")); err != nil {
 		log.Fatal(err)
 	}
 
+	log.Println("Installing new-document hook...")
 	if _, err := page.AddScriptToEvaluateOnNewDocument(hook).Do(ctx); err != nil {
 		log.Fatal(err)
 	}
 
+	log.Println("Installing hook in current page and navigating to Reels...")
 	if err := chromedp.Run(ctx, chromedp.Evaluate(hook, nil), chromedp.Navigate("https://www.instagram.com/reels/")); err != nil {
 		log.Fatal(err)
 	}
