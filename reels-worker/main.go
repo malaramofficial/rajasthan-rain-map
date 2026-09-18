@@ -164,13 +164,40 @@ func main() {
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), wsURL)
 	defer allocCancel()
 
-	ctx, cancel := chromedp.NewContext(allocCtx)
-	defer cancel()
-
-	// Ensure the remote allocator has an active page target before Runtime/Page commands. This avoids CDP "invalid context".
-	if err := chromedp.Run(ctx, chromedp.Navigate("about:blank")); err != nil {
-		log.Fatalf("create browser page: %v", err)
+	// Attach to an existing Instagram page target.
+	port := os.Getenv("CHROME_CDP_PORT")
+	if port == "" {
+		port = "9222"
 	}
+	resp, err := http.Get("http://127.0.0.1:" + port + "/json/list")
+	if err != nil {
+		log.Fatalf("read Chromium targets: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var targets []struct {
+		ID string `json:"id"`
+		Type string `json:"type"`
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
+		log.Fatalf("parse Chromium targets: %v", err)
+	}
+
+	var targetID string
+	for _, t := range targets {
+		if t.Type == "page" && strings.Contains(t.URL, "instagram.com/") {
+			targetID = t.ID
+			break
+		}
+	}
+	if targetID == "" {
+		log.Fatal("no existing Instagram page target found")
+	}
+	log.Printf("Attaching to existing Instagram target: %s", targetID)
+
+	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(chromedp.TargetID(targetID)))
+	defer cancel()
 
 	seen := make(map[string]bool)
 	var seenMu sync.Mutex
