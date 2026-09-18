@@ -34,6 +34,7 @@ type reelResponse struct {
 				Node struct {
 					Media struct {
 						PK          string `json:"pk"`
+						TakenAt     int64  `json:"taken_at"`
 						Code        string `json:"code"`
 						Caption     *struct{ Text string `json:"text"` } `json:"caption"`
 						Video       []struct{ URL string `json:"url"` } `json:"video_versions"`
@@ -69,6 +70,9 @@ func capture(body string) []Media {
 		item := Media{
 			ExternalPostID: m.PK,
 			SourceURL: "https://www.instagram.com/reel/" + m.Code + "/",
+		}
+		if m.TakenAt > 0 {
+			item.PostedAt = time.Unix(m.TakenAt, 0).UTC().Format(time.RFC3339)
 		}
 		if m.Caption != nil {
 			item.CaptionText = m.Caption.Text
