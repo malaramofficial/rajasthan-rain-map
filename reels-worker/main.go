@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -126,7 +127,7 @@ func main() {
 	}
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.UserDataDir(userDataDir),
-		chromedp.Flag("headless", false),
+		chromedp.Flag("headless", strings.EqualFold(os.Getenv("INSTAGRAM_HEADLESS"), "true")),
 	)
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	defer allocCancel()
@@ -134,6 +135,7 @@ func main() {
 	defer cancel()
 
 	seen := map[string]bool{}
+	var seenMu sync.Mutex
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
 		e, ok := ev.(*fetch.EventRequestPaused)
 		if !ok {
@@ -158,10 +160,15 @@ func main() {
 			}
 			_ = decodePostData(e)
 			for _, media := range capture(bodyText) {
-				if seen[media.ExternalPostID] {
+				seenMu.Lock()
+				alreadySeen := seen[media.ExternalPostID]
+				if !alreadySeen {
+					seen[media.ExternalPostID] = true
+				}
+				seenMu.Unlock()
+				if alreadySeen {
 					continue
 				}
-				seen[media.ExternalPostID] = true
 				log.Printf("captured reel %s @%s", media.SourceURL, media.Username)
 				if err := postBatch([]Media{media}); err != nil {
 					log.Printf("ingest: %v", err)
