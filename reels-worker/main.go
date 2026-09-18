@@ -221,6 +221,17 @@ func main() {
 		log.Printf("GRAPHQL BINDING: bytes=%d", len(body))
 		if len(body) <= 1000 {
 			log.Printf("GRAPHQL BODY: %q", body)
+		} else {
+			// Keep a compact fingerprint of larger responses so we can diagnose
+			// which GraphQL operation is actually reaching the worker without
+			// flooding the terminal with full response bodies.
+			if i := strings.Index(body, "xdt_api__v1__"); i >= 0 {
+				end := i + 120
+				if end > len(body) {
+					end = len(body)
+				}
+				log.Printf("GRAPHQL KEY HINT: %q", body[i:end])
+			}
 		}
 
 		if !strings.Contains(body, "xdt_api__v1__clips__home__connection_v2") {
