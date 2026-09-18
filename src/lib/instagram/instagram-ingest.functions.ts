@@ -1,5 +1,3 @@
-import { createServerFn } from "@tanstack/react-start";
-
 import { extractRajasthanLocation, districtCoordinates } from "./rajasthan-location";
 import { discoverHashtagMedia, type DiscoveredInstagramMedia } from "./instagram-discovery";
 import { verifyRainVisualWithOpenAI } from "./rain-ai-verifier";
@@ -138,7 +136,7 @@ async function syncVerifiedObservations(supabaseUrl: string, serviceRoleKey: str
   const value = await response.json(); return typeof value === "number" ? value : 0;
 }
 
-export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).handler(async () => {
+export async function runInstagramCandidateIngestion() {
   const instagramToken = env("INSTAGRAM_ACCESS_TOKEN");
   const configuredFacebookToken = env("META_FACEBOOK_ACCESS_TOKEN");
   const configuredIgUserId = env("META_IG_USER_ID");
@@ -217,4 +215,4 @@ export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).
   const result = { ok: errors.length === 0, discovery_mode: discoveryMode, media_seen: media.length, recent_24h: recent.length, processed: recent.filter((item) => Boolean(item.permalink)).length, ai_checked: aiChecked, ai_confirmed: aiConfirmed, candidates, uncertain, rejected, inserted, synced_public_observations: syncedPublicObservations, errors };
   await finishScanRun(supabaseUrl, serviceRoleKey, scanRunId, result);
   return result;
-});
+}
