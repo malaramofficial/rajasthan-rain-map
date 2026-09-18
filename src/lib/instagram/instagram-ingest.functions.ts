@@ -3,7 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { extractRajasthanLocation, districtCoordinates } from "./rajasthan-location";
 import { discoverHashtagMedia, type DiscoveredInstagramMedia } from "./instagram-discovery";
 import { verifyRainVisualWithOpenAI } from "./rain-ai-verifier";
-import { runRainEvidencePipeline, type InstagramCandidateInput } from "./rain-pipeline";
+import { extractExplicitEventDate, runRainEvidencePipeline, type InstagramCandidateInput } from "./rain-pipeline";
 
 type InstagramMedia = DiscoveredInstagramMedia;
 
@@ -97,7 +97,7 @@ export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).
   if (facebookToken && igUserId) { discoveryMode = "facebook_hashtags"; media = await discoverHashtagMedia(facebookToken, igUserId); }
   else if (instagramToken) media = await fetchOwnMedia(instagramToken);
 
-  const recent = media.filter((item) => isRecent24h(item.timestamp));
+  const recent = media.filter((item) => isRecent24h(item.timestamp)).sort((a, b) => Date.parse(b.timestamp ?? "") - Date.parse(a.timestamp ?? "")).slice(0, 40);
   let inserted = 0, candidates = 0, uncertain = 0, rejected = 0, aiChecked = 0, aiConfirmed = 0;
   const errors: string[] = [];
 
@@ -111,7 +111,7 @@ export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).
     } catch (error) { errors.push(`AI ${item.id}: ${error instanceof Error ? error.message : String(error)}`); }
 
     const candidate = enrichCandidate({
-      source_url: item.permalink, external_post_id: item.id, posted_at: item.timestamp, caption_text: item.caption,
+      source_url: item.permalink, external_post_id: item.id, posted_at: item.timestamp, event_date: extractExplicitEventDate(item.caption), caption_text: item.caption,
       visual_analysis: visualAnalysis,
       original_or_repost: repostSignal(item.caption) ? "repost" : "unknown",
       location_evidence: item.discovery_hashtag ?? null,
