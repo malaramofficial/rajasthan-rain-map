@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/chromedp/cdproto/target"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -196,7 +197,7 @@ func main() {
 	}
 	log.Printf("Attaching to existing Instagram target: %s", targetID)
 
-	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(chromedp.TargetID(targetID)))
+	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetID)))
 	defer cancel()
 
 	seen := make(map[string]bool)
