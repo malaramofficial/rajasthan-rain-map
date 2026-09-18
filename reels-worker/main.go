@@ -16,6 +16,7 @@ import (
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
@@ -173,196 +174,14 @@ func firstInt64(m map[string]any, keys ...string) int64 {
 
 func dedupeMedia(in []Media) []Media {
 	seen := make(map[string]bool)
-	out := make([]Media, 0, len(in))
-	for _, m := range in {
-		if m.ExternalPostID == "" || seen[m.ExternalPostID] {
-			continue
-		}
-		seen[m.ExternalPostID] = true
-		out = append(out, m)
-	}
-	return out
-}
-
-func postBatch(media []Media) error {
-	if len(media) == 0 {
-		return nil
-	}
-	endpoint := os.Getenv("RAINS_MAP_INGEST_URL")
-	secret := os.Getenv("REELS_WORKER_SECRET")
-	if endpoint == "" || secret == "" {
-		return fmt.Errorf("RAINS_MAP_INGEST_URL and REELS_WORKER_SECRET are required")
-	}
-	payload, _ := json.Marshal(map[string]any{"media": media})
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(payload)))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("content-type", "application/json")
-	req.Header.Set("authorization", "Bearer "+secret)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("ingest returned HTTP %s", resp.Status)
-	}
-	return nil
-}
-
-type cdpVersion struct {
-	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
-}
-
-func resolveCDPURL() (string, error) {
-	if wsURL := strings.TrimSpace(os.Getenv("CHROME_CDP_URL")); wsURL != "" {
-		return wsURL, nil
-	}
-	port := os.Getenv("CHROME_CDP_PORT")
-	if port == "" {
-		port = "9222"
-	}
-	versionURL := "http://127.0.0.1:" + port + "/json/version"
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(versionURL)
-	if err != nil {
-		return "", fmt.Errorf("Chromium CDP not reachable at %s: %w", versionURL, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("Chromium CDP endpoint returned HTTP %s", resp.Status)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read CDP version: %w", err)
-	}
-	var v cdpVersion
-	if err := json.Unmarshal(body, &v); err != nil {
-		return "", fmt.Errorf("parse CDP version: %w", err)
-	}
-	if v.WebSocketDebuggerURL == "" {
-		return "", fmt.Errorf("CDP /json/version has no webSocketDebuggerUrl")
-	}
-	return v.WebSocketDebuggerURL, nil
-}
-
-func main() {
-	wsURL, err := resolveCDPURL()
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("Reels worker attaching to Chromium CDP: %s", wsURL)
-
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), wsURL)
-	defer allocCancel()
-
-	port := os.Getenv("CHROME_CDP_PORT")
-	if port == "" {
-		port = "9222"
-	}
-	resp, err := http.Get("http://127.0.0.1:" + port + "/json/list")
-	if err != nil {
-		log.Fatalf("read Chromium targets: %v", err)
-	}
-	defer resp.Body.Close()
-
-	var targets []struct {
-		ID string `json:"id"`
-		Type string `json:"type"`
-		URL string `json:"url"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
-		log.Fatalf("parse Chromium targets: %v", err)
-	}
-
-	var targetID string
-	for _, t := range targets {
-		if t.Type == "page" && strings.Contains(t.URL, "instagram.com/") {
-			targetID = t.ID
-			break
-		}
-	}
-	if targetID == "" {
-		for _, t := range targets {
-			if t.Type == "page" {
-				targetID = t.ID
-				break
-			}
-		}
-	}
-	if targetID == "" {
-		log.Fatal("no page target found in Chromium")
-	}
-	log.Printf("Attaching to Chromium page target: %s", targetID)
-
-	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetID)))
-	defer cancel()
-
-	seen := make(map[string]bool)
 	var seenMu sync.Mutex
-	var graphqlRequests sync.Map // network.RequestID -> URL
 
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
 		if e, ok := ev.(*network.EventResponseReceived); ok {
 			url := e.Response.URL
 			if strings.Contains(url, "/api/graphql") || strings.Contains(url, "/graphql/query") {
-				graphqlRequests.Store(e.RequestID, url)
 				log.Printf("GRAPHQL RESPONSE: request=%s status=%d url=%s", e.RequestID, e.Response.Status, url)
 			}
-		}
-
-		if e, ok := ev.(*network.EventLoadingFinished); ok {
-			requestID := e.RequestID
-			value, ok := graphqlRequests.Load(requestID)
-			if !ok {
-				return
-			}
-			url := value.(string)
-			go func() {
-				// ListenTarget callbacks do not automatically carry a target executor.
-				// Bind the CDP command explicitly to the attached page target.
-				c := chromedp.FromContext(ctx)
-				if c == nil || c.Target == nil {
-					log.Printf("NETWORK BODY ERROR: missing target executor request=%s", requestID)
-					return
-				}
-				execCtx := cdp.WithExecutor(ctx, c.Target)
-				bodyBytes, err := network.GetResponseBody(requestID).Do(execCtx)
-				if err != nil {
-					log.Printf("NETWORK BODY ERROR: %v request=%s url=%s", err, requestID, url)
-					return
-				}
-				body := string(bodyBytes)
-				graphqlRequests.Delete(requestID)
-				if body == "" {
-					return
-				}
-				log.Printf("NETWORK GRAPHQL RESPONSE BODY: bytes=%d request=%s", len(body), requestID)
-				media := capture(body)
-				if len(media) > 0 {
-					log.Printf("CAPTURED REELS: %d", len(media))
-					for _, m := range media {
-						seenMu.Lock()
-						alreadySeen := seen[m.ExternalPostID]
-						if !alreadySeen {
-							seen[m.ExternalPostID] = true
-						}
-						seenMu.Unlock()
-						if alreadySeen {
-							continue
-						}
-						log.Printf("REEL: id=%s user=%s url=%s", m.ExternalPostID, m.Username, m.SourceURL)
-						if err := postBatch([]Media{m}); err != nil {
-							log.Printf("ingest: %v", err)
-						} else {
-							log.Printf("INGEST OK: %s", m.ExternalPostID)
-						}
-					}
-				}
-			}()
 		}
 
 		if e, ok := ev.(*runtime.EventBindingCalled); ok && e.Name == "reelsGraphQL" {
@@ -435,15 +254,19 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Install the fetch/XHR hook before navigation so the initial Reels
+	// GraphQL responses are captured. Page-level Evaluate after navigation
+	// misses the requests that load the first feed.
+	log.Println("Installing GraphQL hook before Reels navigation...")
+	if err := page.AddScriptToEvaluateOnNewDocument(hook).Do(cdp.WithExecutor(ctx, chromedp.FromContext(ctx).Target)); err != nil {
+		log.Fatal(err)
+	}
+
 	log.Println("Navigating attached Instagram target to Reels...")
-	if err := chromedp.Run(ctx, chromedp.Navigate("https://www.instagram.com/reels/"), chromedp.Sleep(4*time.Second)); err != nil {
+	if err := chromedp.Run(ctx, chromedp.Navigate("https://www.instagram.com/reels/"), chromedp.Sleep(6*time.Second)); err != nil {
 		log.Fatal(err)
 	}
-	log.Println("Installing hook in the loaded Reels page...")
-	if err := chromedp.Run(ctx, chromedp.Evaluate(hook, nil)); err != nil {
-		log.Fatal(err)
-	}
-	log.Println("Hook installed after navigation; passive capture is starting.")
+	log.Println("Pre-navigation hook is active; passive capture is starting.")
 
 	var pageURL, pageTitle, pageText string
 	if err := chromedp.Run(ctx, chromedp.Evaluate(`location.href`, &pageURL)); err == nil {
