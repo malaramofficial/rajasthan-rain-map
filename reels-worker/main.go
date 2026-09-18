@@ -294,21 +294,38 @@ func main() {
 			}
 		}
 	}
-	var ctx context.Context
-	var cancel context.CancelFunc
 	if targetID == "" {
-		log.Println("No existing page target found; creating a new Chromium page...")
-		ctx, cancel = chromedp.NewContext(allocCtx)
-		defer cancel()
-		if err := chromedp.Run(ctx, chromedp.Navigate("about:blank")); err != nil {
+		log.Println("No existing page target found; creating a new Chromium page via CDP...")
+		newURL := "http://127.0.0.1:" + port + "/json/new?https://www.instagram.com/"
+		client := &http.Client{Timeout: 5 * time.Second}
+		req, err := http.NewRequest(http.MethodPut, newURL, nil)
+		if err != nil {
+			log.Fatalf("create Chromium page target request: %v", err)
+		}
+		newResp, err := client.Do(req)
+		if err != nil {
 			log.Fatalf("create Chromium page target: %v", err)
 		}
-		log.Println("Created a new Chromium page target.")
-	} else {
-		log.Printf("Attaching to Chromium page target: %s", targetID)
-		ctx, cancel = chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetID)))
-		defer cancel()
+		defer newResp.Body.Close()
+		if newResp.StatusCode < 200 || newResp.StatusCode >= 300 {
+			body, _ := io.ReadAll(newResp.Body)
+			log.Fatalf("create Chromium page target: HTTP %s: %s", newResp.Status, strings.TrimSpace(string(body)))
+		}
+		var created struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(newResp.Body).Decode(&created); err != nil {
+			log.Fatalf("parse created Chromium page target: %v", err)
+		}
+		if created.ID == "" {
+			log.Fatal("create Chromium page target: response has no target id")
+		}
+		targetID = created.ID
+		log.Printf("Created Chromium page target: %s", targetID)
 	}
+	log.Printf("Attaching to Chromium page target: %s", targetID)
+	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetID)))
+	defer cancel()
 
 	seen := make(map[string]bool)
 	var seenMu sync.Mutex
