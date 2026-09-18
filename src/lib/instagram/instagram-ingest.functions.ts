@@ -49,6 +49,45 @@ function enrichCandidate(candidate: InstagramCandidateInput): InstagramCandidate
   return { ...candidate, place: candidate.place ?? location.place, district, latitude: candidate.latitude ?? coords?.latitude ?? null, longitude: candidate.longitude ?? coords?.longitude ?? null, location_evidence: candidate.location_evidence ?? location.evidence };
 }
 
+async function startScanRun(supabaseUrl: string, serviceRoleKey: string): Promise<string | null> {
+  const response = await fetch(supabaseUrl + "/rest/v1/instagram_scan_runs", {
+    method: "POST",
+    headers: { apikey: serviceRoleKey, Authorization: "Bearer " + serviceRoleKey, "Content-Type": "application/json", Prefer: "return=representation" },
+    body: JSON.stringify({}),
+  });
+  if (!response.ok) return null;
+  const rows = (await response.json()) as Array<{ id?: string }>;
+  return rows[0]?.id ?? null;
+}
+
+async function finishScanRun(
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  id: string | null,
+  result: {
+    ok: boolean;
+    discovery_mode: string;
+    media_seen: number;
+    recent_24h: number;
+    processed: number;
+    ai_checked: number;
+    ai_confirmed: number;
+    candidates: number;
+    uncertain: number;
+    rejected: number;
+    inserted: number;
+    synced_public_observations: number;
+    errors: string[];
+  },
+): Promise<void> {
+  if (!id) return;
+  await fetch(supabaseUrl + "/rest/v1/instagram_scan_runs?id=eq." + encodeURIComponent(id), {
+    method: "PATCH",
+    headers: { apikey: serviceRoleKey, Authorization: "Bearer " + serviceRoleKey, "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({ ...result, finished_at: new Date().toISOString() }),
+  });
+}
+
 async function insertEvidence(supabaseUrl: string, serviceRoleKey: string, input: InstagramCandidateInput, pipeline: { rain_observed: boolean; verification_status: "pending" | "uncertain" | "rejected" | "verified"; confidence: number; rejection_reason: string | null }) {
   const response = await fetch(`${supabaseUrl}/rest/v1/instagram_rain_evidence?on_conflict=source_url`, {
     method: "POST",
@@ -91,6 +130,8 @@ export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).
     facebookToken ??= stored?.pageAccessToken;
     igUserId ??= stored?.instagramUserId;
   }
+
+  const scanRunId = await startScanRun(supabaseUrl, serviceRoleKey);
 
   let media: InstagramMedia[] = [];
   let discoveryMode: "facebook_hashtags" | "instagram_own_media" = "instagram_own_media";
@@ -144,5 +185,7 @@ export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).
     try { syncedPublicObservations = await syncVerifiedObservations(supabaseUrl, serviceRoleKey); }
     catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
   }
-  return { ok: errors.length === 0, discovery_mode: discoveryMode, media_seen: media.length, recent_24h: recent.length, processed: recent.filter((item) => Boolean(item.permalink)).length, ai_checked: aiChecked, ai_confirmed: aiConfirmed, candidates, uncertain, rejected, inserted, synced_public_observations: syncedPublicObservations, errors };
+  const result = { ok: errors.length === 0, discovery_mode: discoveryMode, media_seen: media.length, recent_24h: recent.length, processed: recent.filter((item) => Boolean(item.permalink)).length, ai_checked: aiChecked, ai_confirmed: aiConfirmed, candidates, uncertain, rejected, inserted, synced_public_observations: syncedPublicObservations, errors };
+  await finishScanRun(supabaseUrl, serviceRoleKey, scanRunId, result);
+  return result;
 });
