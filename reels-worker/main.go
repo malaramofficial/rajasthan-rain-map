@@ -185,6 +185,7 @@ func main() {
 	}
 
 	var targetID string
+	// Prefer an existing Instagram page, but fall back to any normal page.
 	for _, t := range targets {
 		if t.Type == "page" && strings.Contains(t.URL, "instagram.com/") {
 			targetID = t.ID
@@ -192,9 +193,17 @@ func main() {
 		}
 	}
 	if targetID == "" {
-		log.Fatal("no existing Instagram page target found")
+		for _, t := range targets {
+			if t.Type == "page" {
+				targetID = t.ID
+				break
+			}
+		}
 	}
-	log.Printf("Attaching to existing Instagram target: %s", targetID)
+	if targetID == "" {
+		log.Fatal("no page target found in Chromium")
+	}
+	log.Printf("Attaching to Chromium page target: %s", targetID)
 
 	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetID)))
 	defer cancel()
