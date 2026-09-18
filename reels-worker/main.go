@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
@@ -286,15 +285,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Println("Installing new-document hook...")
-	if _, err := page.AddScriptToEvaluateOnNewDocument(hook).Do(ctx); err != nil {
+	log.Println("Skipping new-document hook; installing hook in existing Instagram page...")
+	if err := chromedp.Run(ctx, chromedp.Evaluate(hook, nil)); err != nil {
 		log.Fatal(err)
 	}
-
-	log.Println("Installing hook in current page and navigating to Reels...")
-	if err := chromedp.Run(ctx, chromedp.Evaluate(hook, nil), chromedp.Navigate("https://www.instagram.com/reels/")); err != nil {
-		log.Fatal(err)
-	}
+	log.Println("Hook installed in existing Instagram page; passive capture is starting.")
 
 	log.Println("Reels passive capture worker is running.")
 	log.Println("Instagram Reels feed is open in the attached Chromium browser.")
