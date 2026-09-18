@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
@@ -174,8 +176,16 @@ func firstInt64(m map[string]any, keys ...string) int64 {
 
 func dedupeMedia(in []Media) []Media {
 	seen := make(map[string]bool)
-	var seenMu sync.Mutex
-
+	out := make([]Media, 0, len(in))
+	for _, m := range in {
+		if m.ExternalPostID == "" || seen[m.ExternalPostID] {
+			continue
+		}
+		seen[m.ExternalPostID] = true
+		out = append(out, m)
+	}
+	return out
+}
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
 		if e, ok := ev.(*network.EventResponseReceived); ok {
 			url := e.Response.URL
@@ -183,10 +193,14 @@ func dedupeMedia(in []Media) []Media {
 				log.Printf("GRAPHQL RESPONSE: request=%s status=%d url=%s", e.RequestID, e.Response.Status, url)
 			}
 		}
-
 		if e, ok := ev.(*runtime.EventBindingCalled); ok && e.Name == "reelsGraphQL" {
 			body := e.Payload
 			log.Printf("GRAPHQL BINDING: bytes=%d", len(body))
+			preview := body
+			if len(preview) > 700 {
+				preview = preview[:700]
+			}
+			log.Printf("GRAPHQL BODY PREVIEW: %q", preview)
 			media := capture(body)
 			if len(media) > 0 {
 				log.Printf("CAPTURED REELS FROM BINDING: %d", len(media))
@@ -211,52 +225,11 @@ func dedupeMedia(in []Media) []Media {
 		}
 	})
 
-	hook := `(function() {
-		if (window.__reelsHookInstalled) return;
-		window.__reelsHookInstalled = true;
-		function send(url, response) {
-			try {
-				if (!url || (!url.includes("/api/graphql") && !url.includes("/graphql/query"))) return;
-				response.clone().text().then(function(body) {
-					if (body && typeof window.reelsGraphQL === "function") window.reelsGraphQL(body);
-				}).catch(function() {});
-			} catch (_) {}
-		}
-		const originalFetch = window.fetch;
-		window.fetch = async function(...args) {
-			const response = await originalFetch.apply(this, args);
-			const request = args[0];
-			const url = typeof request === "string" ? request : (request && request.url) || "";
-			send(url, response);
-			return response;
-		};
-		const originalOpen = XMLHttpRequest.prototype.open;
-		const originalSend = XMLHttpRequest.prototype.send;
-		XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-			this.__reelsURL = String(url || "");
-			return originalOpen.call(this, method, url, ...rest);
-		};
-		XMLHttpRequest.prototype.send = function(...args) {
-			this.addEventListener("load", function() {
-				try {
-					const url = this.__reelsURL || this.responseURL || "";
-					if (!url.includes("/api/graphql") && !url.includes("/graphql/query")) return;
-					const body = typeof this.responseText === "string" ? this.responseText : "";
-					if (body && typeof window.reelsGraphQL === "function") window.reelsGraphQL(body);
-				} catch (_) {}
-			});
-			return originalSend.apply(this, args);
-		};
-	})();`
-
 	log.Println("Enabling runtime, network capture, and adding binding...")
 	if err := chromedp.Run(ctx, runtime.Enable(), network.Enable(), runtime.AddBinding("reelsGraphQL")); err != nil {
 		log.Fatal(err)
 	}
 
-	// Install the fetch/XHR hook before navigation so the initial Reels
-	// GraphQL responses are captured. Page-level Evaluate after navigation
-	// misses the requests that load the first feed.
 	log.Println("Installing GraphQL hook before Reels navigation...")
 	if err := page.AddScriptToEvaluateOnNewDocument(hook).Do(cdp.WithExecutor(ctx, chromedp.FromContext(ctx).Target)); err != nil {
 		log.Fatal(err)
@@ -268,27 +241,3 @@ func dedupeMedia(in []Media) []Media {
 	}
 	log.Println("Pre-navigation hook is active; passive capture is starting.")
 
-	var pageURL, pageTitle, pageText string
-	if err := chromedp.Run(ctx, chromedp.Evaluate(`location.href`, &pageURL)); err == nil {
-		log.Printf("PAGE URL: %s", pageURL)
-	}
-	if err := chromedp.Run(ctx, chromedp.Title(&pageTitle)); err == nil {
-		log.Printf("PAGE TITLE: %s", pageTitle)
-	}
-	if err := chromedp.Run(ctx, chromedp.Evaluate(`document.body ? document.body.innerText.slice(0, 2000) : ""`, &pageText)); err == nil {
-		pageText = strings.ReplaceAll(pageText, "\n", " | ")
-		log.Printf("PAGE TEXT: %q", pageText)
-	}
-
-	log.Println("Triggering a small scroll sequence to cause Reels API activity...")
-	if err := chromedp.Run(ctx, chromedp.Evaluate(`window.scrollBy(0, Math.max(400, window.innerHeight));`, nil), chromedp.Sleep(2*time.Second)); err != nil {
-		log.Printf("scroll trigger: %v", err)
-	}
-
-	log.Println("Reels passive capture worker is running.")
-	log.Println("Instagram Reels feed is open in the attached Chromium browser.")
-
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
-}
