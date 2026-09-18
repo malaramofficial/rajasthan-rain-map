@@ -294,13 +294,21 @@ func main() {
 			}
 		}
 	}
+	var ctx context.Context
+	var cancel context.CancelFunc
 	if targetID == "" {
-		log.Fatal("no page target found in Chromium")
+		log.Println("No existing page target found; creating a new Chromium page...")
+		ctx, cancel = chromedp.NewContext(allocCtx)
+		defer cancel()
+		if err := chromedp.Run(ctx, chromedp.Navigate("about:blank")); err != nil {
+			log.Fatalf("create Chromium page target: %v", err)
+		}
+		log.Println("Created a new Chromium page target.")
+	} else {
+		log.Printf("Attaching to Chromium page target: %s", targetID)
+		ctx, cancel = chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetID)))
+		defer cancel()
 	}
-	log.Printf("Attaching to Chromium page target: %s", targetID)
-
-	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetID)))
-	defer cancel()
 
 	seen := make(map[string]bool)
 	var seenMu sync.Mutex
