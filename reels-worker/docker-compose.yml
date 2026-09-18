@@ -1,0 +1,11 @@
+services:
+  reels-worker:
+    build: .
+    restart: unless-stopped
+    environment:
+      INSTAGRAM_CHROME_PROFILE: /data/instagram-profile
+      RAINS_MAP_INGEST_URL: https://rajasthan-rain-map.vercel.app/api/instagram/reels-ingest
+      REELS_WORKER_SECRET: ${REELS_WORKER_SECRET}
+      INSTAGRAM_HEADLESS: "false"
+    volumes:
+      - ./instagram-profile:/data/instagram-profile
