@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -34,28 +35,20 @@ type reelResponse struct {
 			Edges []struct {
 				Node struct {
 					Media struct {
-						PK          string `json:"pk"`
-						TakenAt     int64  `json:"taken_at"`
-						Code        string `json:"code"`
-						ImageVersions2 *struct { Candidates []struct { URL string `json:"url"` } `json:"candidates"` } `json:"image_versions2"`
-						Caption     *struct{ Text string `json:"text"` } `json:"caption"`
-						Video       []struct{ URL string `json:"url"` } `json:"video_versions"`
-						User        struct{ Username string `json:"username"` } `json:"user"`
+						PK string `json:"pk"`
+						TakenAt int64 `json:"taken_at"`
+						Code string `json:"code"`
+						ImageVersions2 *struct {
+							Candidates []struct { URL string `json:"url"` } `json:"candidates"`
+						} `json:"image_versions2"`
+						Caption *struct{ Text string `json:"text"` } `json:"caption"`
+						Video []struct{ URL string `json:"url"` } `json:"video_versions"`
+						User struct{ Username string `json:"username"` } `json:"user"`
 					} `json:"media"`
 				} `json:"node"`
 			} `json:"edges"`
 		} `json:"xdt_api__v1__clips__home__connection_v2"`
 	} `json:"data"`
-}
-
-func decodePostData(e *fetch.EventRequestPaused) string {
-	var raw []byte
-	for _, entry := range e.Request.PostDataEntries {
-		if decoded, err := base64.StdEncoding.DecodeString(entry.Bytes); err == nil {
-			raw = append(raw, decoded...)
-		}
-	}
-	return string(raw)
 }
 
 func capture(body string) []Media {
@@ -120,11 +113,53 @@ func postBatch(media []Media) error {
 	return nil
 }
 
-func main() {
-	wsURL := os.Getenv("CHROME_CDP_URL")
-	if wsURL == "" {
-		wsURL = "ws://127.0.0.1:9222"
+type cdpVersion struct {
+	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+}
+
+func resolveCDPURL() (string, error) {
+	if wsURL := strings.TrimSpace(os.Getenv("CHROME_CDP_URL")); wsURL != "" {
+		return wsURL, nil
 	}
+
+	port := os.Getenv("CHROME_CDP_PORT")
+	if port == "" {
+		port = "9222"
+	}
+	versionURL := "http://127.0.0.1:" + port + "/json/version"
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(versionURL)
+	if err != nil {
+		return "", fmt.Errorf("Chromium CDP not reachable at %s: %w", versionURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("Chromium CDP endpoint returned HTTP %s", resp.Status)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read CDP version: %w", err)
+	}
+
+	var v cdpVersion
+	if err := json.Unmarshal(body, &v); err != nil {
+		return "", fmt.Errorf("parse CDP version: %w", err)
+	}
+	if v.WebSocketDebuggerURL == "" {
+		return "", fmt.Errorf("CDP /json/version has no webSocketDebuggerUrl")
+	}
+	return v.WebSocketDebuggerURL, nil
+}
+
+func main() {
+	wsURL, err := resolveCDPURL()
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Reels worker attaching to Chromium CDP: %s", wsURL)
 
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), wsURL)
 	defer allocCancel()
