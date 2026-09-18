@@ -285,11 +285,19 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Println("Skipping new-document hook; installing hook in existing Instagram page...")
+	log.Println("Navigating attached Instagram target to Reels...")
+	if err := chromedp.Run(ctx, chromedp.Navigate("https://www.instagram.com/reels/"), chromedp.Sleep(4*time.Second)); err != nil {
+		log.Fatal(err)
+	}
+	log.Println("Installing hook in the loaded Reels page...")
 	if err := chromedp.Run(ctx, chromedp.Evaluate(hook, nil)); err != nil {
 		log.Fatal(err)
 	}
-	log.Println("Hook installed in existing Instagram page; passive capture is starting.")
+	log.Println("Hook installed after navigation; passive capture is starting.")
+	log.Println("Triggering a small scroll sequence to cause Reels API activity...")
+	if err := chromedp.Run(ctx, chromedp.Evaluate(`window.scrollBy(0, Math.max(400, window.innerHeight));`, nil), chromedp.Sleep(2*time.Second)); err != nil {
+		log.Printf("scroll trigger: %v", err)
+	}
 
 	log.Println("Reels passive capture worker is running.")
 	log.Println("Instagram Reels feed is open in the attached Chromium browser.")
