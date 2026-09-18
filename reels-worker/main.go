@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/runtime"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
 
@@ -212,6 +213,32 @@ func main() {
 	var seenMu sync.Mutex
 
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
+		if e, ok := ev.(*network.EventResponseReceived); ok {
+			url := e.Response.URL
+			if strings.Contains(url, "/api/graphql") || strings.Contains(url, "/graphql/query") {
+				go func(requestID network.RequestID, responseURL string) {
+					var result *network.GetResponseBodyReturnParams
+					if err := chromedp.Run(ctx, network.GetResponseBody(requestID), chromedp.ActionFunc(func(ctx context.Context) error {
+						var err error
+						result, err = network.GetResponseBody(requestID).Do(ctx)
+						return err
+					})); err != nil {
+						log.Printf("NETWORK BODY ERROR: %v url=%s", err, responseURL)
+						return
+					}
+					if result == nil || result.Body == "" {
+						return
+					}
+					body := result.Body
+					if strings.Contains(body, "media") || strings.Contains(body, "xdt_") || strings.Contains(body, "shortcode") {
+						log.Printf("NETWORK GRAPHQL RESPONSE: bytes=%d url=%s", len(body), responseURL)
+						if len(body) <= 2000 {
+							log.Printf("NETWORK BODY: %q", body)
+						}
+					}
+				}(e.RequestID, url)
+			}
+		}
 		e, ok := ev.(*runtime.EventBindingCalled)
 		if !ok || e.Name != "reelsGraphQL" {
 			return
@@ -309,8 +336,8 @@ func main() {
 		};
 	})();`
 
-	log.Println("Enabling runtime and adding binding...")
-	if err := chromedp.Run(ctx, runtime.Enable(), runtime.AddBinding("reelsGraphQL")); err != nil {
+	log.Println("Enabling runtime, network capture, and adding binding...")
+	if err := chromedp.Run(ctx, runtime.Enable(), network.Enable(), runtime.AddBinding("reelsGraphQL")); err != nil {
 		log.Fatal(err)
 	}
 
