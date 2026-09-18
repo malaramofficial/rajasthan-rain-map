@@ -318,6 +318,25 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Println("Hook installed after navigation; passive capture is starting.")
+
+	var pageURL, pageTitle, pageText string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(`location.href`, &pageURL)); err != nil {
+		log.Printf("PAGE URL: %v", err)
+	} else {
+		log.Printf("PAGE URL: %s", pageURL)
+	}
+	if err := chromedp.Run(ctx, chromedp.Title(&pageTitle)); err != nil {
+		log.Printf("PAGE TITLE: %v", err)
+	} else {
+		log.Printf("PAGE TITLE: %s", pageTitle)
+	}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(`document.body ? document.body.innerText.slice(0, 2000) : ""`, &pageText)); err != nil {
+		log.Printf("PAGE TEXT: %v", err)
+	} else {
+		pageText = strings.ReplaceAll(pageText, "\n", " | ")
+		log.Printf("PAGE TEXT: %q", pageText)
+	}
+
 	log.Println("Triggering a small scroll sequence to cause Reels API activity...")
 	if err := chromedp.Run(ctx, chromedp.Evaluate(`window.scrollBy(0, Math.max(400, window.innerHeight));`, nil), chromedp.Sleep(2*time.Second)); err != nil {
 		log.Printf("scroll trigger: %v", err)
