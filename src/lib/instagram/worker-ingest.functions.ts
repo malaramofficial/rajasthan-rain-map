@@ -3,12 +3,13 @@ import { verifyRainVisualWithOpenAI } from "./rain-ai-verifier";
 import { extractExplicitEventDate, runRainEvidencePipeline, type InstagramCandidateInput } from "./rain-pipeline";
 
 export type WorkerReelInput = {
-  id: string;
-  timestamp?: string | null;
-  permalink?: string | null;
-  caption?: string | null;
+  external_post_id: string;
+  source_url: string;
+  posted_at?: string | null;
+  caption_text?: string | null;
   media_url?: string | null;
   thumbnail_url?: string | null;
+  username?: string | null;
 };
 
 function repostSignal(text: string | null | undefined): boolean {
@@ -133,7 +134,7 @@ export async function runWorkerReelIngestion(items: WorkerReelInput[]) {
   const errors: string[] = [];
 
   for (const item of items) {
-    if (!item.id || !item.permalink) continue;
+    if (!item.external_post_id || !item.source_url) continue;
 
     try {
       let visualAnalysis: string | null = null;
@@ -142,7 +143,7 @@ export async function runWorkerReelIngestion(items: WorkerReelInput[]) {
       try {
         const ai = await verifyRainVisualWithOpenAI({
           imageUrl: item.thumbnail_url ?? item.media_url,
-          caption: item.caption,
+          caption: item.caption_text,
         });
         if (ai) {
           aiChecked++;
@@ -151,15 +152,15 @@ export async function runWorkerReelIngestion(items: WorkerReelInput[]) {
           if (rainObservedOverride) aiConfirmed++;
         }
       } catch (error) {
-        errors.push(`AI ${item.id}: ${error instanceof Error ? error.message : String(error)}`);
+        errors.push(`AI ${item.external_post_id}: ${error instanceof Error ? error.message : String(error)}`);
       }
 
       const candidate = enrichCandidate({
-        source_url: item.permalink,
-        external_post_id: item.id,
-        posted_at: item.timestamp,
-        event_date: extractExplicitEventDate(item.caption),
-        caption_text: item.caption,
+        source_url: item.source_url,
+        external_post_id: item.external_post_id,
+        posted_at: item.posted_at,
+        event_date: extractExplicitEventDate(item.caption_text),
+        caption_text: item.caption_text,
         visual_analysis: visualAnalysis,
         original_or_repost: repostSignal(item.caption) ? "repost" : "unknown",
         location_evidence: null,
@@ -202,7 +203,7 @@ export async function runWorkerReelIngestion(items: WorkerReelInput[]) {
       );
       inserted++;
     } catch (error) {
-      errors.push(`${item.id}: ${error instanceof Error ? error.message : String(error)}`);
+      errors.push(`${item.external_post_id}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
