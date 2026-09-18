@@ -305,6 +305,45 @@ func main() {
 	seen := make(map[string]bool)
 	var seenMu sync.Mutex
 
+	hook := `(function() {
+		if (window.__reelsHookInstalled) return;
+		window.__reelsHookInstalled = true;
+		function send(url, response) {
+			try {
+				if (!url || (!url.includes("/api/graphql") && !url.includes("/graphql/query"))) return;
+				response.clone().text().then(function(body) {
+					if (body && typeof window.reelsGraphQL === "function") window.reelsGraphQL(body);
+				}).catch(function() {});
+			} catch (_) {}
+		}
+		const originalFetch = window.fetch;
+		window.fetch = async function(...args) {
+			const response = await originalFetch.apply(this, args);
+			const request = args[0];
+			const url = typeof request === "string" ? request : (request && request.url) || "";
+			send(url, response);
+			return response;
+		};
+		const originalOpen = XMLHttpRequest.prototype.open;
+		const originalSend = XMLHttpRequest.prototype.send;
+		XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+			this.__reelsURL = String(url || "");
+			return originalOpen.call(this, method, url, ...rest);
+		};
+		XMLHttpRequest.prototype.send = function(...args) {
+			this.addEventListener("load", function() {
+				try {
+					const url = this.__reelsURL || this.responseURL || "";
+					if (!url.includes("/api/graphql") && !url.includes("/graphql/query")) return;
+					const body = typeof this.responseText === "string" ? this.responseText : "";
+					if (body && typeof window.reelsGraphQL === "function") window.reelsGraphQL(body);
+				} catch (_) {}
+			});
+			return originalSend.apply(this, args);
+		};
+	})();`
+
+
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
 		if e, ok := ev.(*network.EventResponseReceived); ok {
 			url := e.Response.URL
@@ -351,7 +390,7 @@ func main() {
 	}
 
 	log.Println("Installing GraphQL hook before Reels navigation...")
-	if err := page.AddScriptToEvaluateOnNewDocument(hook).Do(cdp.WithExecutor(ctx, chromedp.FromContext(ctx).Target)); err != nil {
+	if _, err := page.AddScriptToEvaluateOnNewDocument(hook).Do(cdp.WithExecutor(ctx, chromedp.FromContext(ctx).Target)); err != nil {
 		log.Fatal(err)
 	}
 
