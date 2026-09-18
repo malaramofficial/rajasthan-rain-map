@@ -176,8 +176,30 @@ export const exchangeFacebookBusinessCode = createServerFn({ method: "POST" })
       const pageCount = pages.length;
       const linkedCount = linkedPages.length;
       const tokenCount = pages.filter((item) => Boolean(item.access_token)).length;
+
+      // Safe diagnostic: never expose the user/Page access token itself.
+      const permissionsUrl = new URL(`${META_GRAPH_BASE}/me/permissions`);
+      permissionsUrl.searchParams.set("access_token", tokenPayload.access_token);
+      const permissionsResponse = await fetch(permissionsUrl, { cache: "no-store" });
+      const permissionsPayload = (await permissionsResponse.json()) as {
+        data?: Array<{ permission?: string; status?: string }>;
+      };
+      const granted = (permissionsPayload.data ?? [])
+        .filter((item) => item.status === "granted")
+        .map((item) => item.permission)
+        .filter((item): item is string => Boolean(item));
+
+      const missingExpected = ["pages_show_list", "instagram_basic", "pages_read_engagement"]
+        .filter((permission) => !granted.includes(permission));
+
+      const accountUrl = new URL(`${META_GRAPH_BASE}/me`);
+      accountUrl.searchParams.set("fields", "id,name");
+      accountUrl.searchParams.set("access_token", tokenPayload.access_token);
+      const accountResponse = await fetch(accountUrl, { cache: "no-store" });
+      const accountPayload = (await accountResponse.json()) as { id?: string; name?: string };
+
       throw new Error(
-        `Meta authorization सफल हुआ, लेकिन Page connection data अधूरा मिला। Pages=${pageCount}, linked Instagram Pages=${linkedCount}, Page access tokens=${tokenCount}. कृपया इसी Meta account से selected Page/Instagram को रहने दें और फिर Connect दोबारा चलाएँ।`,
+        `Meta authorization सफल है, लेकिन Graph API ने Pages नहीं लौटाए। Pages=${pageCount}, linked Instagram Pages=${linkedCount}, Page access tokens=${tokenCount}. Granted permissions=${granted.join(",") || "none"}. Missing expected permissions=${missingExpected.join(",") || "none"}. Facebook user=${accountPayload.name || "unknown"} (${accountPayload.id ? "ID मिला" : "ID नहीं मिला"}). Meta में Pages/Instagram selection सही है; अब permissions/token response की जाँच करनी है।`,
       );
     }
 
