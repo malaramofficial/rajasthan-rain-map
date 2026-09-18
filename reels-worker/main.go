@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
@@ -302,48 +303,62 @@ func main() {
 
 	seen := make(map[string]bool)
 	var seenMu sync.Mutex
+	var graphqlRequests sync.Map // network.RequestID -> URL
 
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
 		if e, ok := ev.(*network.EventResponseReceived); ok {
 			url := e.Response.URL
 			if strings.Contains(url, "/api/graphql") || strings.Contains(url, "/graphql/query") {
+				graphqlRequests.Store(e.RequestID, url)
 				log.Printf("GRAPHQL RESPONSE: request=%s status=%d url=%s", e.RequestID, e.Response.Status, url)
 			}
 		}
 
 		if e, ok := ev.(*network.EventLoadingFinished); ok {
 			requestID := e.RequestID
+			value, ok := graphqlRequests.Load(requestID)
+			if !ok {
+				return
+			}
+			url := value.(string)
 			go func() {
-				bodyBytes, err := network.GetResponseBody(requestID).Do(ctx)
+				// ListenTarget callbacks do not automatically carry a target executor.
+				// Bind the CDP command explicitly to the attached page target.
+				c := chromedp.FromContext(ctx)
+				if c == nil || c.Target == nil {
+					log.Printf("NETWORK BODY ERROR: missing target executor request=%s", requestID)
+					return
+				}
+				execCtx := cdp.WithExecutor(ctx, c.Target)
+				bodyBytes, err := network.GetResponseBody(requestID).Do(execCtx)
 				if err != nil {
-					log.Printf("NETWORK BODY ERROR: %v request=%s", err, requestID)
+					log.Printf("NETWORK BODY ERROR: %v request=%s url=%s", err, requestID, url)
 					return
 				}
 				body := string(bodyBytes)
+				graphqlRequests.Delete(requestID)
 				if body == "" {
 					return
 				}
-				if strings.Contains(body, "media") || strings.Contains(body, "xdt_") || strings.Contains(body, "shortcode") || strings.Contains(body, "video_versions") {
-					log.Printf("NETWORK GRAPHQL RESPONSE BODY: bytes=%d request=%s", len(body), requestID)
-					media := capture(body)
-					if len(media) > 0 {
-						log.Printf("CAPTURED REELS: %d", len(media))
-						for _, m := range media {
-							seenMu.Lock()
-							alreadySeen := seen[m.ExternalPostID]
-							if !alreadySeen {
-								seen[m.ExternalPostID] = true
-							}
-							seenMu.Unlock()
-							if alreadySeen {
-								continue
-							}
-							log.Printf("REEL: id=%s user=%s url=%s", m.ExternalPostID, m.Username, m.SourceURL)
-							if err := postBatch([]Media{m}); err != nil {
-								log.Printf("ingest: %v", err)
-							} else {
-								log.Printf("INGEST OK: %s", m.ExternalPostID)
-							}
+				log.Printf("NETWORK GRAPHQL RESPONSE BODY: bytes=%d request=%s", len(body), requestID)
+				media := capture(body)
+				if len(media) > 0 {
+					log.Printf("CAPTURED REELS: %d", len(media))
+					for _, m := range media {
+						seenMu.Lock()
+						alreadySeen := seen[m.ExternalPostID]
+						if !alreadySeen {
+							seen[m.ExternalPostID] = true
+						}
+						seenMu.Unlock()
+						if alreadySeen {
+							continue
+						}
+						log.Printf("REEL: id=%s user=%s url=%s", m.ExternalPostID, m.Username, m.SourceURL)
+						if err := postBatch([]Media{m}); err != nil {
+							log.Printf("ingest: %v", err)
+						} else {
+							log.Printf("INGEST OK: %s", m.ExternalPostID)
 						}
 					}
 				}
