@@ -117,8 +117,22 @@ export const runInstagramCandidateIngestion = createServerFn({ method: "GET" }).
       location_evidence: item.discovery_hashtag ?? null,
     });
     const pipeline = runRainEvidencePipeline(candidate);
+    const canAutoVerify =
+      rainObservedOverride &&
+      pipeline.decision !== "rejected" &&
+      candidate.original_or_repost !== "repost" &&
+      pipeline.reasons.includes("rajasthan_location_verified") &&
+      !pipeline.reasons.includes("event_date_differs_from_post_date");
+
     const effectivePipeline = rainObservedOverride && pipeline.decision !== "rejected"
-      ? { ...pipeline, rain_observed: true, verification_status: pipeline.verification_status, confidence: Math.max(pipeline.confidence, 0.8), reasons: [...pipeline.reasons, "ai_visual_rain_confirmed"] }
+      ? {
+          ...pipeline,
+          decision: canAutoVerify ? "candidate" : pipeline.decision,
+          rain_observed: true,
+          verification_status: canAutoVerify ? "verified" : pipeline.verification_status,
+          confidence: Math.max(pipeline.confidence, canAutoVerify ? 0.8 : 0.75),
+          reasons: [...pipeline.reasons, "ai_visual_rain_confirmed", ...(canAutoVerify ? ["auto_verified_visual_rain"] : [])],
+        }
       : pipeline;
     if (effectivePipeline.decision === "candidate") candidates++; else if (effectivePipeline.decision === "uncertain") uncertain++; else rejected++;
     try { await insertEvidence(supabaseUrl, serviceRoleKey, candidate, effectivePipeline); inserted++; }
