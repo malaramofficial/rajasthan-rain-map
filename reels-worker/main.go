@@ -1,7 +1,6 @@
 package main
 
 import (
-	"github.com/chromedp/cdproto/target"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,72 +14,171 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/runtime"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
 
 type Media struct {
 	ExternalPostID string `json:"external_post_id"`
-	SourceURL     string `json:"source_url"`
-	PostedAt      string `json:"posted_at"`
-	CaptionText   string `json:"caption_text"`
-	ThumbnailURL  string `json:"thumbnail_url"`
-	MediaURL      string `json:"media_url"`
-	Username      string `json:"username"`
+	SourceURL      string `json:"source_url"`
+	PostedAt       string `json:"posted_at"`
+	CaptionText    string `json:"caption_text"`
+	ThumbnailURL   string `json:"thumbnail_url"`
+	MediaURL       string `json:"media_url"`
+	Username       string `json:"username"`
 }
 
-type reelResponse struct {
-	Data struct {
-		Connection struct {
-			Edges []struct {
-				Node struct {
-					Media struct {
-						PK string `json:"pk"`
-						TakenAt int64 `json:"taken_at"`
-						Code string `json:"code"`
-						ImageVersions2 *struct {
-							Candidates []struct { URL string `json:"url"` } `json:"candidates"`
-						} `json:"image_versions2"`
-						Caption *struct{ Text string `json:"text"` } `json:"caption"`
-						Video []struct{ URL string `json:"url"` } `json:"video_versions"`
-						User struct{ Username string `json:"username"` } `json:"user"`
-					} `json:"media"`
-				} `json:"node"`
-			} `json:"edges"`
-		} `json:"xdt_api__v1__clips__home__connection_v2"`
-	} `json:"data"`
+type genericGraphQL struct {
+	Data any `json:"data"`
 }
 
 func capture(body string) []Media {
-	var resp reelResponse
-	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+	var root genericGraphQL
+	if err := json.Unmarshal([]byte(body), &root); err != nil {
 		return nil
 	}
-	out := make([]Media, 0, len(resp.Data.Connection.Edges))
-	for _, edge := range resp.Data.Connection.Edges {
-		m := edge.Node.Media
-		if m.PK == "" || m.Code == "" {
+	var out []Media
+	walkJSON(root.Data, &out)
+	return dedupeMedia(out)
+}
+
+func walkJSON(v any, out *[]Media) {
+	switch x := v.(type) {
+	case map[string]any:
+		if m, ok := mediaFromMap(x); ok {
+			*out = append(*out, m)
+		}
+		for _, child := range x {
+			walkJSON(child, out)
+		}
+	case []any:
+		for _, child := range x {
+			walkJSON(child, out)
+		}
+	}
+}
+
+func mediaFromMap(m map[string]any) (Media, bool) {
+	pk := firstString(m, "pk", "id")
+	code := firstString(m, "code", "shortcode")
+	if pk == "" || code == "" {
+		return Media{}, false
+	}
+
+	item := Media{
+		ExternalPostID: pk,
+		SourceURL:      "https://www.instagram.com/reel/" + code + "/",
+		Username:       nestedString(m, "user", "username"),
+		CaptionText:   captionText(m),
+		ThumbnailURL:  firstURL(m, "image_versions2", "candidates"),
+		MediaURL:      firstURL(m, "video_versions"),
+	}
+	if ts := firstInt64(m, "taken_at", "taken_at_timestamp", "timestamp"); ts > 0 {
+		item.PostedAt = time.Unix(ts, 0).UTC().Format(time.RFC3339)
+	}
+	return item, true
+}
+
+func firstString(m map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if s, ok := m[k].(string); ok && s != "" {
+			return s
+		}
+		if n, ok := m[k].(json.Number); ok {
+			return n.String()
+		}
+		if f, ok := m[k].(float64); ok && f != 0 {
+			return fmt.Sprintf("%.0f", f)
+		}
+	}
+	return ""
+}
+
+func nestedString(m map[string]any, parent, key string) string {
+	if child, ok := m[parent].(map[string]any); ok {
+		return firstString(child, key)
+	}
+	return ""
+}
+
+func captionText(m map[string]any) string {
+	if c, ok := m["caption"].(map[string]any); ok {
+		return firstString(c, "text")
+	}
+	if c, ok := m["caption"].(string); ok {
+		return c
+	}
+	return firstString(m, "caption_text", "title")
+}
+
+func firstURL(m map[string]any, key string, nested ...string) string {
+	v, ok := m[key]
+	if !ok {
+		return ""
+	}
+	return findURL(v, nested...)
+}
+
+func findURL(v any, nested ...string) string {
+	switch x := v.(type) {
+	case map[string]any:
+		for _, k := range nested {
+			if child, ok := x[k]; ok {
+				if u := findURL(child); u != "" {
+					return u
+				}
+			}
+		}
+		for _, k := range []string{"url", "src"} {
+			if s, ok := x[k].(string); ok && strings.HasPrefix(s, "http") {
+				return s
+			}
+		}
+		for _, child := range x {
+			if u := findURL(child); u != "" {
+				return u
+			}
+		}
+	case []any:
+		for _, child := range x {
+			if u := findURL(child); u != "" {
+				return u
+			}
+		}
+	}
+	return ""
+}
+
+func firstInt64(m map[string]any, keys ...string) int64 {
+	for _, k := range keys {
+		switch n := m[k].(type) {
+		case float64:
+			return int64(n)
+		case json.Number:
+			if v, err := n.Int64(); err == nil {
+				return v
+			}
+		case string:
+			var v int64
+			if _, err := fmt.Sscan(n, &v); err == nil {
+				return v
+			}
+		}
+	}
+	return 0
+}
+
+func dedupeMedia(in []Media) []Media {
+	seen := make(map[string]bool)
+	out := make([]Media, 0, len(in))
+	for _, m := range in {
+		if m.ExternalPostID == "" || seen[m.ExternalPostID] {
 			continue
 		}
-		item := Media{
-			ExternalPostID: m.PK,
-			SourceURL: "https://www.instagram.com/reel/" + m.Code + "/",
-		}
-		if m.TakenAt > 0 {
-			item.PostedAt = time.Unix(m.TakenAt, 0).UTC().Format(time.RFC3339)
-		}
-		if m.ImageVersions2 != nil && len(m.ImageVersions2.Candidates) > 0 {
-			item.ThumbnailURL = m.ImageVersions2.Candidates[0].URL
-		}
-		if m.Caption != nil {
-			item.CaptionText = m.Caption.Text
-		}
-		if len(m.Video) > 0 {
-			item.MediaURL = m.Video[0].URL
-		}
-		item.Username = m.User.Username
-		out = append(out, item)
+		seen[m.ExternalPostID] = true
+		out = append(out, m)
 	}
 	return out
 }
@@ -122,29 +220,24 @@ func resolveCDPURL() (string, error) {
 	if wsURL := strings.TrimSpace(os.Getenv("CHROME_CDP_URL")); wsURL != "" {
 		return wsURL, nil
 	}
-
 	port := os.Getenv("CHROME_CDP_PORT")
 	if port == "" {
 		port = "9222"
 	}
 	versionURL := "http://127.0.0.1:" + port + "/json/version"
-
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(versionURL)
 	if err != nil {
 		return "", fmt.Errorf("Chromium CDP not reachable at %s: %w", versionURL, err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("Chromium CDP endpoint returned HTTP %s", resp.Status)
 	}
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("read CDP version: %w", err)
 	}
-
 	var v cdpVersion
 	if err := json.Unmarshal(body, &v); err != nil {
 		return "", fmt.Errorf("parse CDP version: %w", err)
@@ -165,7 +258,6 @@ func main() {
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), wsURL)
 	defer allocCancel()
 
-	// Attach to an existing Instagram page target.
 	port := os.Getenv("CHROME_CDP_PORT")
 	if port == "" {
 		port = "9222"
@@ -186,7 +278,6 @@ func main() {
 	}
 
 	var targetID string
-	// Prefer an existing Instagram page, but fall back to any normal page.
 	for _, t := range targets {
 		if t.Type == "page" && strings.Contains(t.URL, "instagram.com/") {
 			targetID = t.ID
@@ -216,77 +307,72 @@ func main() {
 		if e, ok := ev.(*network.EventResponseReceived); ok {
 			url := e.Response.URL
 			if strings.Contains(url, "/api/graphql") || strings.Contains(url, "/graphql/query") {
-				go func(requestID network.RequestID, responseURL string) {
-					bodyBytes, err := network.GetResponseBody(requestID).Do(ctx)
-					if err != nil {
-						log.Printf("NETWORK BODY ERROR: %v url=%s", err, responseURL)
-						return
-					}
-					body := string(bodyBytes)
-					if body == "" {
-						return
-					}
-					if strings.Contains(body, "media") || strings.Contains(body, "xdt_") || strings.Contains(body, "shortcode") {
-						log.Printf("NETWORK GRAPHQL RESPONSE: bytes=%d url=%s", len(body), responseURL)
-						if len(body) <= 2000 {
-							log.Printf("NETWORK BODY: %q", body)
+				log.Printf("GRAPHQL RESPONSE: request=%s status=%d url=%s", e.RequestID, e.Response.Status, url)
+			}
+		}
+
+		if e, ok := ev.(*network.EventLoadingFinished); ok {
+			requestID := e.RequestID
+			go func() {
+				bodyBytes, err := network.GetResponseBody(requestID).Do(ctx)
+				if err != nil {
+					log.Printf("NETWORK BODY ERROR: %v request=%s", err, requestID)
+					return
+				}
+				body := string(bodyBytes)
+				if body == "" {
+					return
+				}
+				if strings.Contains(body, "media") || strings.Contains(body, "xdt_") || strings.Contains(body, "shortcode") || strings.Contains(body, "video_versions") {
+					log.Printf("NETWORK GRAPHQL RESPONSE BODY: bytes=%d request=%s", len(body), requestID)
+					media := capture(body)
+					if len(media) > 0 {
+						log.Printf("CAPTURED REELS: %d", len(media))
+						for _, m := range media {
+							seenMu.Lock()
+							alreadySeen := seen[m.ExternalPostID]
+							if !alreadySeen {
+								seen[m.ExternalPostID] = true
+							}
+							seenMu.Unlock()
+							if alreadySeen {
+								continue
+							}
+							log.Printf("REEL: id=%s user=%s url=%s", m.ExternalPostID, m.Username, m.SourceURL)
+							if err := postBatch([]Media{m}); err != nil {
+								log.Printf("ingest: %v", err)
+							} else {
+								log.Printf("INGEST OK: %s", m.ExternalPostID)
+							}
 						}
 					}
-				}(e.RequestID, url)
-			}
-		}
-		e, ok := ev.(*runtime.EventBindingCalled)
-		if !ok || e.Name != "reelsGraphQL" {
-			return
-		}
-
-		body := e.Payload
-		log.Printf("GRAPHQL BINDING: bytes=%d", len(body))
-		if len(body) <= 1000 {
-			log.Printf("GRAPHQL BODY: %q", body)
-		} else {
-			// Log compact hints from larger responses so we can discover the
-			// current Instagram response shape without dumping full payloads.
-			for _, marker := range []string{"xdt_", "media", "code", "video_versions", "image_versions2", "shortcode"} {
-				if i := strings.Index(body, marker); i >= 0 {
-					start := i - 60
-					if start < 0 {
-						start = 0
-					}
-					end := i + 180
-					if end > len(body) {
-						end = len(body)
-					}
-					log.Printf("GRAPHQL HINT %s: %q", marker, body[start:end])
 				}
-			}
+			}()
 		}
 
-		if !strings.Contains(body, "xdt_api__v1__clips__home__connection_v2") {
-			log.Printf("GRAPHQL: expected reels connection key not found")
-			return
-		}
-
-		media := capture(body)
-		log.Printf("CAPTURED REELS: %d", len(media))
-
-		for _, m := range media {
-			seenMu.Lock()
-			alreadySeen := seen[m.ExternalPostID]
-			if !alreadySeen {
-				seen[m.ExternalPostID] = true
-			}
-			seenMu.Unlock()
-
-			if alreadySeen {
-				continue
-			}
-
-			log.Printf("REEL: id=%s user=%s url=%s", m.ExternalPostID, m.Username, m.SourceURL)
-			if err := postBatch([]Media{m}); err != nil {
-				log.Printf("ingest: %v", err)
-			} else {
-				log.Printf("INGEST OK: %s", m.ExternalPostID)
+		if e, ok := ev.(*runtime.EventBindingCalled); ok && e.Name == "reelsGraphQL" {
+			body := e.Payload
+			log.Printf("GRAPHQL BINDING: bytes=%d", len(body))
+			media := capture(body)
+			if len(media) > 0 {
+				log.Printf("CAPTURED REELS FROM BINDING: %d", len(media))
+				for _, m := range media {
+					seenMu.Lock()
+					alreadySeen := seen[m.ExternalPostID]
+					if !alreadySeen {
+						seen[m.ExternalPostID] = true
+					}
+					seenMu.Unlock()
+					if alreadySeen {
+						continue
+					}
+					log.Printf("REEL: id=%s user=%s url=%s", m.ExternalPostID, m.Username, m.SourceURL)
+					if err := postBatch([]Media{m}); err != nil {
+						log.Printf("ingest: %v", err)
+					} else {
+						log.Printf("INGEST OK: %s", m.ExternalPostID)
+					}
+				}
 			}
 		}
 	})
@@ -294,7 +380,6 @@ func main() {
 	hook := `(function() {
 		if (window.__reelsHookInstalled) return;
 		window.__reelsHookInstalled = true;
-
 		function send(url, response) {
 			try {
 				if (!url || (!url.includes("/api/graphql") && !url.includes("/graphql/query"))) return;
@@ -303,7 +388,6 @@ func main() {
 				}).catch(function() {});
 			} catch (_) {}
 		}
-
 		const originalFetch = window.fetch;
 		window.fetch = async function(...args) {
 			const response = await originalFetch.apply(this, args);
@@ -312,7 +396,6 @@ func main() {
 			send(url, response);
 			return response;
 		};
-
 		const originalOpen = XMLHttpRequest.prototype.open;
 		const originalSend = XMLHttpRequest.prototype.send;
 		XMLHttpRequest.prototype.open = function(method, url, ...rest) {
@@ -348,19 +431,13 @@ func main() {
 	log.Println("Hook installed after navigation; passive capture is starting.")
 
 	var pageURL, pageTitle, pageText string
-	if err := chromedp.Run(ctx, chromedp.Evaluate(`location.href`, &pageURL)); err != nil {
-		log.Printf("PAGE URL: %v", err)
-	} else {
+	if err := chromedp.Run(ctx, chromedp.Evaluate(`location.href`, &pageURL)); err == nil {
 		log.Printf("PAGE URL: %s", pageURL)
 	}
-	if err := chromedp.Run(ctx, chromedp.Title(&pageTitle)); err != nil {
-		log.Printf("PAGE TITLE: %v", err)
-	} else {
+	if err := chromedp.Run(ctx, chromedp.Title(&pageTitle)); err == nil {
 		log.Printf("PAGE TITLE: %s", pageTitle)
 	}
-	if err := chromedp.Run(ctx, chromedp.Evaluate(`document.body ? document.body.innerText.slice(0, 2000) : ""`, &pageText)); err != nil {
-		log.Printf("PAGE TEXT: %v", err)
-	} else {
+	if err := chromedp.Run(ctx, chromedp.Evaluate(`document.body ? document.body.innerText.slice(0, 2000) : ""`, &pageText)); err == nil {
 		pageText = strings.ReplaceAll(pageText, "\n", " | ")
 		log.Printf("PAGE TEXT: %q", pageText)
 	}
