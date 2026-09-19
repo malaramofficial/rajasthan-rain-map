@@ -1,7 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 
 import { toPublicPoints } from "./projection";
-import type { PublicRainSnapshot, RainEvidence } from "./types";
+import type { PublicRainPoint, PublicRainSnapshot, RainEvidence } from "./types";
+import { RAJASTHAN_DISTRICTS } from "./rajasthan-districts";
 
 function todayInIST(): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -76,7 +77,76 @@ export const getPublicRainSnapshot = createServerFn({ method: "GET" }).handler(
 
       if (error) throw error;
 
-      const points = toPublicPoints((data ?? []) as unknown as RainEvidence[]);
+      const observedPoints = toPublicPoints((data ?? []) as unknown as RainEvidence[]);
+
+      // The public map must remain useful even when no Instagram observation has
+      // been verified yet. Fetch a lightweight forecast for every Rajasthan
+      // district headquarters in one Open-Meteo request. Forecast points are
+      // intentionally represented differently from observed-rain points.
+      let forecastPoints: PublicRainPoint[] = [];
+      try {
+        const latitudes = RAJASTHAN_DISTRICTS.map((d) => d.latitude).join(",");
+        const longitudes = RAJASTHAN_DISTRICTS.map((d) => d.longitude).join(",");
+        const forecastUrl =
+          "https://api.open-meteo.com/v1/forecast" +
+          `?latitude=${latitudes}&longitude=${longitudes}` +
+          "&current=precipitation,rain" +
+          "&hourly=precipitation_probability,precipitation" +
+          "&forecast_days=1&timezone=Asia%2FKolkata";
+
+        const response = await fetch(forecastUrl, {
+          cache: "no-store",
+          headers: { accept: "application/json" },
+        });
+        if (!response.ok) throw new Error(`Open-Meteo HTTP ${response.status}`);
+
+        const payload = (await response.json()) as Array<{
+          current?: { precipitation?: number; rain?: number };
+          hourly?: {
+            precipitation_probability?: number[];
+            precipitation?: number[];
+          };
+        }>;
+
+        const observedDistricts = new Set(observedPoints.map((p) => p.district));
+
+        forecastPoints = RAJASTHAN_DISTRICTS.flatMap((district, index) => {
+          const item = payload[index];
+          if (!item) return [];
+
+          const currentRain = Number(item.current?.rain ?? 0);
+          const currentPrecipitation = Number(item.current?.precipitation ?? 0);
+          const probabilities = item.hourly?.precipitation_probability ?? [];
+          const precipitation = item.hourly?.precipitation ?? [];
+          const nextSixProbability = Math.max(...probabilities.slice(0, 6), 0);
+          const nextSixPrecipitation = precipitation.slice(0, 6).reduce(
+            (sum, value) => sum + Number(value || 0),
+            0,
+          );
+
+          // Show only meaningful rain signals; dry districts stay visually clean.
+          const shouldShow =
+            currentRain > 0 ||
+            currentPrecipitation > 0 ||
+            nextSixProbability >= 50 ||
+            nextSixPrecipitation >= 0.2;
+
+          if (!shouldShow || observedDistricts.has(district.district)) return [];
+
+          return [{
+            id: `forecast-${district.district}`,
+            place: district.district,
+            district: district.district,
+            latitude: district.latitude,
+            longitude: district.longitude,
+            status: "forecast" as const,
+          }];
+        });
+      } catch (forecastError) {
+        console.error("Public weather forecast read failed", forecastError);
+      }
+
+      const points = [...observedPoints, ...forecastPoints];
       return {
         observation_date,
         updated_at,
