@@ -1,0 +1,41 @@
+name: Reels Worker Cloud Build
+
+on:
+  push:
+    paths:
+      - "reels-worker/**"
+      - ".github/workflows/reels-worker-cloud.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reels-worker
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: reels-worker/go.mod
+          cache-dependency-path: reels-worker/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Compile worker
+        run: go build -v .
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Verify HMAC source
+        run: |
+          grep -q 'x-device-id' main.go
+          grep -q 'x-timestamp' main.go
+          grep -q 'x-signature' main.go
+          grep -q 'hmac.New' main.go
+          echo "HMAC worker checks passed"
