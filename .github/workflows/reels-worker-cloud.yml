@@ -26,6 +26,9 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Normalize Go dependencies
+        run: go mod tidy
+
       - name: Compile worker
         run: go build -v .
 
