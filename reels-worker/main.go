@@ -202,7 +202,7 @@ func postBatch(media []Media) error {
 		return nil
 	}
 	endpoint := os.Getenv("RAINS_MAP_INGEST_URL")
-	secret := os.Getenv("REELS_WORKER_SECRET")
+	secret := strings.TrimSpace(os.Getenv("REELS_WORKER_SECRET"))
 	if endpoint == "" || secret == "" {
 		return fmt.Errorf("RAINS_MAP_INGEST_URL and REELS_WORKER_SECRET are required")
 	}
@@ -226,7 +226,8 @@ func postBatch(media []Media) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("ingest returned HTTP %s", resp.Status)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		return fmt.Errorf("ingest returned HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	return nil
 }
