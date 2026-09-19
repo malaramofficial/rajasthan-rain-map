@@ -156,12 +156,13 @@ export async function runInstagramCandidateIngestion() {
 
   const scanRunId = await startScanRun(supabaseUrl, serviceRoleKey);
 
+  try {
   let media: InstagramMedia[] = [];
   let discoveryMode: "facebook_hashtags" | "instagram_own_media" = "instagram_own_media";
   if (facebookToken && igUserId) { discoveryMode = "facebook_hashtags"; media = await discoverHashtagMedia(facebookToken, igUserId); }
   else if (instagramToken) media = await fetchOwnMedia(instagramToken);
 
-  const recent = media.filter((item) => isRecent24h(item.timestamp)).sort((a, b) => Date.parse(b.timestamp ?? "") - Date.parse(a.timestamp ?? "")).slice(0, 40);
+  const recent = media.filter((item) => isRecent24h(item.timestamp)).sort((a, b) => Date.parse(b.timestamp ?? "") - Date.parse(a.timestamp ?? "")).slice(0, 6);
   let inserted = 0, candidates = 0, uncertain = 0, rejected = 0, aiChecked = 0, aiConfirmed = 0;
   const errors: string[] = [];
 
@@ -215,4 +216,23 @@ export async function runInstagramCandidateIngestion() {
   const result = { ok: errors.length === 0, discovery_mode: discoveryMode, media_seen: media.length, recent_24h: recent.length, processed: recent.filter((item) => Boolean(item.permalink)).length, ai_checked: aiChecked, ai_confirmed: aiConfirmed, candidates, uncertain, rejected, inserted, synced_public_observations: syncedPublicObservations, errors };
   await finishScanRun(supabaseUrl, serviceRoleKey, scanRunId, result);
   return result;
+  } catch (error) {
+    const result = {
+      ok: false,
+      discovery_mode: "error",
+      media_seen: 0,
+      recent_24h: 0,
+      processed: 0,
+      ai_checked: 0,
+      ai_confirmed: 0,
+      candidates: 0,
+      uncertain: 0,
+      rejected: 0,
+      inserted: 0,
+      synced_public_observations: 0,
+      errors: [error instanceof Error ? error.message : String(error)],
+    };
+    await finishScanRun(supabaseUrl, serviceRoleKey, scanRunId, result);
+    return result;
+  }
 }
