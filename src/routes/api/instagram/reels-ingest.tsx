@@ -7,34 +7,20 @@ const WORKER_DEVICE_ID = "rajasthan-rain-worker-01";
 const MAX_CLOCK_SKEW_SECONDS = 5 * 60;
 
 function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function makeHmac(secret: string, message: string): Promise<string> {
   const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    encoder.encode(message),
-  );
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(message));
   return bytesToHex(new Uint8Array(signature));
 }
 
 function constantTimeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
+  for (let i = 0; i < a.length; i++) result |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return result === 0;
 }
 
@@ -80,7 +66,9 @@ export const Route = createFileRoute("/api/instagram/reels-ingest")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const expectedSecret = process.env["REELS_WORKER_SECRET"] ?? process.env["CRON_SECRET"];
+        // Trim only surrounding whitespace. This prevents an accidental newline/space
+        // in either deployment environment from producing a false HMAC mismatch.
+        const expectedSecret = (process.env["REELS_WORKER_SECRET"] ?? process.env["CRON_SECRET"] ?? "").trim();
         const deviceId = request.headers.get("x-device-id");
         const timestampHeader = request.headers.get("x-timestamp");
         const signature = request.headers.get("x-signature");
@@ -113,7 +101,7 @@ export const Route = createFileRoute("/api/instagram/reels-ingest")({
 
         try {
           const body = JSON.parse(bodyText) as { media?: ReelsWorkerMedia[] };
-          const media = Array.isArray(body.media) ? body.media.slice(0, 100) : [];
+          const media = Array.isArray(body.media) ? body.media.slice(0, 25) : [];
           const supabaseUrl = process.env["SUPABASE_URL"];
           const serviceRoleKey = process.env["SUPABASE_SERVICE_ROLE_KEY"];
           if (!supabaseUrl || !serviceRoleKey) throw new Error("Supabase server configuration is missing.");
