@@ -22,7 +22,7 @@ function normalizeResult(value: unknown): AiVerification | null {
 async function verifyWithPublicOpenSourceSpace(imageUrl: string): Promise<AiVerification | null> {
   const base = process.env["RAIN_OPEN_SOURCE_SPACE_URL"] ?? "https://pyedward-weatherai.hf.space";
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 45000);
+  const timer = setTimeout(() => controller.abort(), 8000);
 
   try {
     const start = await fetch(base + "/gradio_api/call/classify_weather", {
@@ -96,6 +96,8 @@ async function verifyWithOpenAI(input: {
   if (!apiKey) return null;
 
   const model = process.env["RAIN_VISION_MODEL"] ?? "gpt-5.6-luna";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
   let response: Response;
   try {
     response = await fetch("https://api.openai.com/v1/responses", {
@@ -123,6 +125,8 @@ async function verifyWithOpenAI(input: {
     console.error("Reels AI verification request failed:", error instanceof Error ? error.message : String(error));
     return null;
   }
+
+  clearTimeout(timer);
 
   if (!response.ok) {
     const errorBody = await response.text();
