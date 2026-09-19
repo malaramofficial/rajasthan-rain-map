@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,6 +24,15 @@ import (
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
+
+const deviceID = "rajasthan-rain-worker-01";
+
+func makeSignature(secret, timestamp, body string) string {
+	message := timestamp + "\n" + body
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(message))
+	return hex.EncodeToString(mac.Sum(nil))
+}
 
 type Media struct {
 	ExternalPostID string `json:"external_post_id"`
@@ -201,8 +213,13 @@ func postBatch(media []Media) error {
 	if err != nil {
 		return err
 	}
+	timestamp := fmt.Sprintf("%d", time.Now().Unix())
+	signature := makeSignature(secret, timestamp, string(payload))
+
 	req.Header.Set("content-type", "application/json")
-	req.Header.Set("authorization", "Bearer "+secret)
+	req.Header.Set("x-device-id", deviceID)
+	req.Header.Set("x-timestamp", timestamp)
+	req.Header.Set("x-signature", signature)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
