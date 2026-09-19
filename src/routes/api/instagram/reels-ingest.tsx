@@ -85,7 +85,16 @@ export const Route = createFileRoute("/api/instagram/reels-ingest")({
         const timestampHeader = request.headers.get("x-timestamp");
         const signature = request.headers.get("x-signature");
 
-        if (!expectedSecret || deviceId !== WORKER_DEVICE_ID || !timestampHeader || !signature) {
+        if (!expectedSecret) {
+          console.error("Reels HMAC auth failed: server secret is missing");
+          return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), { status: 401, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+        }
+        if (deviceId !== WORKER_DEVICE_ID) {
+          console.error("Reels HMAC auth failed: invalid device id");
+          return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), { status: 401, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+        }
+        if (!timestampHeader || !signature) {
+          console.error("Reels HMAC auth failed: missing timestamp or signature");
           return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), { status: 401, headers: { "content-type": "application/json", "cache-control": "no-store" } });
         }
 
@@ -98,6 +107,7 @@ export const Route = createFileRoute("/api/instagram/reels-ingest")({
         const bodyText = await request.text();
         const expectedSignature = await makeHmac(expectedSecret, timestampHeader + "\n" + bodyText);
         if (!constantTimeEqual(signature, expectedSignature)) {
+          console.error("Reels HMAC auth failed: invalid signature");
           return new Response(JSON.stringify({ ok: false, error: "Invalid signature" }), { status: 401, headers: { "content-type": "application/json", "cache-control": "no-store" } });
         }
 
