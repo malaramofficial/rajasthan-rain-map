@@ -106,6 +106,7 @@ async function verifyWithOpenAI(input: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
+      signal: controller.signal,
       body: JSON.stringify({
         model,
         input: [{
@@ -122,6 +123,7 @@ async function verifyWithOpenAI(input: {
       }),
     });
   } catch (error) {
+    clearTimeout(timer);
     console.error("Reels AI verification request failed:", error instanceof Error ? error.message : String(error));
     return null;
   }
