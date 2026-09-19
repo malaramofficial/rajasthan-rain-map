@@ -54,7 +54,16 @@ func capture(body string) []Media {
 		return nil
 	}
 	var out []Media
-	walkJSON(root.Data, &out)
+
+	// Instagram Reels responses can place injected units outside the
+	// traditional GraphQL data field. Walk the complete response so those
+	// current payload shapes are captured too.
+	var decoded any
+	if err := json.Unmarshal([]byte(body), &decoded); err == nil {
+		walkJSON(decoded, &out)
+	} else {
+		walkJSON(root.Data, &out)
+	}
 	return dedupeMedia(out)
 }
 
